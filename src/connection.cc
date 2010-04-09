@@ -5,7 +5,7 @@
 #include "tlsclient/public/connection.h"
 
 #include "tlsclient/public/error.h"
-#include "tlsclient/public/buffer.h"
+#include "tlsclient/src/buffer.h"
 #include "tlsclient/src/connection_private.h"
 #include "tlsclient/src/error-internal.h"
 #include "tlsclient/src/handshake.h"

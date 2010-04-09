@@ -4,11 +4,11 @@
 
 #include <vector>
 
-#include "tlsclient/public/buffer.h"
 #include "tlsclient/public/connection.h"
 #include "tlsclient/public/context.h"
-#include "tlsclient/src/handshake.h"
+#include "tlsclient/src/buffer.h"
 #include "tlsclient/src/connection_private.h"
+#include "tlsclient/src/handshake.h"
 #include "tlsclient/src/sink.h"
 
 #include <gtest/gtest.h>

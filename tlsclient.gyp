@@ -29,12 +29,12 @@
         '..',
       ],
       'sources': [
-        'src/arena_unittest.cc',
-        'src/buffer_unittest.cc',
-        'src/connection_unittest.cc',
-        'src/error_unittest.cc',
-        'src/handshake_unittest.cc',
-        'src/sink_unittest.cc',
+        'tests/arena_unittest.cc',
+        'tests/buffer_unittest.cc',
+        'tests/connection_unittest.cc',
+        'tests/error_unittest.cc',
+        'tests/handshake_unittest.cc',
+        'tests/sink_unittest.cc',
       ],
       'dependencies': [
         'libtlsclient',
@@ -49,7 +49,7 @@
       'target_name': 'openssl-helper',
       'type': 'executable',
       'sources': [
-        'src/openssl-helper.cc',
+        'tests/openssl-helper.cc',
       ],
       'ldflags': [
         '-lcrypto',
