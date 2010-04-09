@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "tlsclient/src/extension.h"
+
+#include "tlsclient/src/base-internal.h"
+#include "tlsclient/public/buffer.h"
+#include "tlsclient/src/error-internal.h"
 #include "tlsclient/src/handshake.h"
 #include "tlsclient/src/connection_private.h"
 #include "tlsclient/src/sink.h"
@@ -23,11 +28,20 @@ class RenegotiationInfo : public Extension {
     sink->U8(0);
     return 0;
   }
+
+  Result Process(Buffer* extension, ConnectionPrivate* priv) const {
+    priv->server_supports_renegotiation_info = true;
+    return 0;
+  }
 };
 
 RenegotiationInfo g_renegotiation_info;
 
-static Result MaybeIncludeExtension(Extension* ext, Sink *sink, ConnectionPrivate* priv) {
+static const Extension* kExtensions[] = {
+  &g_renegotiation_info,
+};
+
+static Result MaybeIncludeExtension(const Extension* ext, Sink *sink, ConnectionPrivate* priv) {
   if (!ext->ShouldBeIncluded(priv))
     return 0;
 
@@ -39,9 +53,40 @@ static Result MaybeIncludeExtension(Extension* ext, Sink *sink, ConnectionPrivat
 Result MarshallClientHelloExtensions(Sink* sink, ConnectionPrivate* priv) {
   Result r;
 
-  r = MaybeIncludeExtension(&g_renegotiation_info, sink, priv);
-  if (r)
-    return r;
+  for (size_t i = 0; i < arraysize(kExtensions); i++) {
+    r = MaybeIncludeExtension(kExtensions[i], sink, priv);
+    if (r)
+      return r;
+  }
+
+  return 0;
+}
+
+Result ProcessServerHelloExtensions(Buffer* extensions, ConnectionPrivate* priv) {
+  bool ok;
+
+  while (extensions->remaining()) {
+    uint16_t extension_type;
+    if (!extensions->U16(&extension_type))
+      return ERROR_RESULT(ERR_INVALID_HANDSHAKE_MESSAGE);
+    Buffer extension(extensions->VariableLength(&ok, 2));
+    if (!ok)
+      return ERROR_RESULT(ERR_INVALID_HANDSHAKE_MESSAGE);
+
+    bool found = false;
+    for (size_t i = 0; i < arraysize(kExtensions); i++) {
+      if (kExtensions[i]->value() == extension_type) {
+        Result r = kExtensions[i]->Process(&extension, priv);
+        if (r)
+          return r;
+        found = true;
+        break;
+      }
+    }
+
+    if (!found)
+      return ERROR_RESULT(ERR_UNKNOWN_EXTENSION);
+  }
 
   return 0;
 }

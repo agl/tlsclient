@@ -8,6 +8,8 @@
 #include "tlsclient/public/base.h"
 #include "tlsclient/public/error.h"
 
+#include <vector>
+
 namespace tlsclient {
 
 enum HandshakeState {
@@ -19,6 +21,8 @@ enum HandshakeState {
   SEND_PHASE_TWO,
   RECV_CHANGE_CIPHER_SPEC,
   RECV_FINISHED,
+  // Changing something here? Don't forget to update
+  // kPermittedHandshakeMessagesPerState!
 };
 
 enum HandshakeMessage {
@@ -53,6 +57,39 @@ enum RecordType {
   // If you add new entries here, also add them to IsValidRecordType
 };
 
+enum AlertLevel {
+  ALERT_LEVEL_WARNING = 1,
+  ALERT_LEVEL_ERROR = 2,
+};
+
+enum AlertType {
+  ALERT_CLOSE_NOTIFY = 0,
+  ALERT_UNEXPECTED_MESSAGE = 10,
+  ALERT_BAD_RECORD_MAC = 20,
+  ALERT_DECRYPTION_FAILED = 21,
+  ALERT_RECORD_OVERFLOW = 22,
+  ALERT_DECOMPRESSION_FAILURE = 30,
+  ALERT_HANDSHAKE_FAILURE = 40,
+  ALERT_NO_CERTIFICATE = 41,
+  ALERT_BAD_CERTIFICATE = 42,
+  ALERT_UNSUPPORTED_CERTIFICATE = 43,
+  ALERT_CERTIFICATE_REVOKED = 44,
+  ALERT_CERTIFICATE_EXPIRED = 45,
+  ALERT_CERTIFICATE_UNKNOWN = 46,
+  ALERT_ILLEGAL_PARAMETER = 47,
+  ALERT_UNKNOWN_CA = 48,
+  ALERT_ACCESS_DENIED = 49,
+  ALERT_DECODE_ERROR = 50,
+  ALERT_DECRYPT_ERROR = 51,
+  ALERT_EXPORT_RESTRICTION = 60,
+  ALERT_PROTOCOL_VERSION = 70,
+  ALERT_INSUFFICIENT_SECURITY = 71,
+  ALERT_INTERNAL_ERROR = 80,
+  ALERT_USER_CANCELED = 90,
+  ALERT_NO_RENEGOTIATION = 100,
+  ALERT_UNSUPPORTED_EXTENSION = 110,
+};
+
 enum {
   CIPHERSUITE_RSA = 1 << 0,
   CIPHERSUITE_RC4 = 1 << 1,
@@ -72,18 +109,18 @@ struct CipherSuite {
 
 class Sink;
 class ConnectionPrivate;
+class Buffer;
 
-struct Extension {
- public:
-  // Called to see if this extension should be included.
-  virtual bool ShouldBeIncluded(ConnectionPrivate* priv) const = 0;
-  virtual Result Marshall(Sink* sink, ConnectionPrivate* priv) const = 0;
-  // The IANA assigned extension number.
-  virtual uint16_t value() const = 0;
-};
-
+bool IsValidAlertLevel(uint8_t wire_level);
 Result MarshallClientHello(Sink* sink, ConnectionPrivate* priv);
-Result MarshallClientHelloExtensions(Sink* sink, ConnectionPrivate* priv);
+Result GetHandshakeMessage(bool* found, HandshakeMessage* htype, std::vector<struct iovec>* out, Buffer* in);
+Result GetRecordOrHandshake(bool* found, RecordType* type, HandshakeMessage* htype, std::vector<struct iovec>* out, Buffer* in, ConnectionPrivate* priv);
+Result AlertTypeToResult(AlertType);
+
+Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in);
+Result ProcessHandshakeMessage(ConnectionPrivate* priv, HandshakeMessage type, Buffer* in);
+Result ProcessServerCertificate(ConnectionPrivate* priv, Buffer* in);
+Result ProcessServerHelloDone(ConnectionPrivate* priv, Buffer* in);
 
 }  // namespace tlsclient
 

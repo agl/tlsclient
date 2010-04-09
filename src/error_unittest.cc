@@ -64,6 +64,17 @@ TEST_F(ErrorTest, Basic) {
   ASSERT_EQ('c', filename[5]);
   ASSERT_EQ('c', filename[6]);
   ASSERT_EQ(0, filename[7]);
+
+  const Result r9 = ErrorResult("dir/TEST.cc", 0, ERR_SUCCESS);
+  FilenameFromResult(filename, r9);
+  ASSERT_EQ('t', filename[0]);
+  ASSERT_EQ('e', filename[1]);
+  ASSERT_EQ('s', filename[2]);
+  ASSERT_EQ('t', filename[3]);
+  ASSERT_EQ('.', filename[4]);
+  ASSERT_EQ('c', filename[5]);
+  ASSERT_EQ('c', filename[6]);
+  ASSERT_EQ(0, filename[7]);
 }
 
 }  // anonymous namespace

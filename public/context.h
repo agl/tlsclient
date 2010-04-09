@@ -16,13 +16,14 @@ class Certificate {
   virtual unsigned size() = 0;
 
   virtual bool EncryptPKCS1(uint8_t* output, uint8_t* bytes, size_t length) = 0;
+  virtual unsigned SizeEncryptPKCS1(size_t length) = 0;
 };
 
 class Context {
  public:
   virtual bool RandomBytes(void*, size_t) = 0;
   virtual uint64_t EpochSeconds() = 0;
-  virtual Certificate* ParseRSACertificate(const uint8_t* bytes, size_t length) = 0;
+  virtual Certificate* ParseCertificate(const uint8_t* bytes, size_t length) = 0;
 };
 
 }  // namespace tlsclient

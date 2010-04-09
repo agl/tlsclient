@@ -5,7 +5,9 @@
 #include "tlsclient/public/connection.h"
 
 #include "tlsclient/public/error.h"
+#include "tlsclient/public/buffer.h"
 #include "tlsclient/src/connection_private.h"
+#include "tlsclient/src/error-internal.h"
 #include "tlsclient/src/handshake.h"
 #include "tlsclient/src/sink.h"
 
@@ -55,12 +57,25 @@ Result Connection::Get(struct iovec* out) {
 
   assert(need_to_write());
 
-  {
+  if (priv_->state == SEND_PHASE_ONE) {
     Sink s(sink.Record(TLSv12, RECORD_HANDSHAKE));
     Sink ss(sink.HandshakeMessage(CLIENT_HELLO));
     const Result r = MarshallClientHello(&ss, priv_);
     if (r)
       return r;
+    priv_->state = RECV_SERVER_HELLO;
+  } else if (priv_->state == SEND_PHASE_TWO) {
+    Sink s(sink.Record(TLSv12, RECORD_HANDSHAKE));
+    {
+      Sink ss(sink.HandshakeMessage(CLIENT_KEY_EXCHANGE));
+      assert(false);
+      /*const Result r = MarshallClientKeyExchange(&ss, priv_);
+      if (r)
+        return r;*/
+    }
+    priv_->state = RECV_CHANGE_CIPHER_SPEC;
+  } else {
+    assert(false);
   }
 
   out->iov_len = sink.size();
@@ -88,9 +103,9 @@ void Connection::EnableDefault() {
 
 void Connection::SetEnableBit(unsigned mask, bool enable) {
   if (enable) {
-    priv_->ciphersuite_flags |= mask;
+    priv_->cipher_suite_flags_enabled |= mask;
   } else {
-    priv_->ciphersuite_flags &= ~mask;
+    priv_->cipher_suite_flags_enabled &= ~mask;
   }
 }
 
@@ -100,9 +115,69 @@ Result Connection::Process(struct iovec** out, unsigned* out_n, size_t* used,
   *out_n = 0;
   *used = 0;
 
-  
+  Buffer buf(iov, n);
+  bool found;
+  RecordType type;
+  HandshakeMessage htype;
 
-  return 0;
+  for (;;) {
+    // In order to be False Start compatible, if we're waiting to send we stop
+    // processing. Otherwise we'll be in the wrong state to process the record.
+    if (need_to_write())
+      return 0;
+
+    priv_->out_vectors.clear();
+
+    Result r = GetRecordOrHandshake(&found, &type, &htype, &priv_->out_vectors, &buf, priv_);
+    if (r)
+      return r;
+
+    if (!found)
+      return 0;
+
+    if (type == RECORD_APPLICATION_DATA) {
+      if (!priv_->application_data_allowed)
+        return ERROR_RESULT(ERR_UNEXPECTED_APPLICATION_DATA);
+      *out = &priv_->out_vectors[0];
+      *out_n = priv_->out_vectors.size();
+      *used = buf.TellBytes();
+      return 0;
+    }
+
+    Buffer in(&priv_->out_vectors[0], priv_->out_vectors.size());
+
+    switch (type) {
+      case RECORD_ALERT: {
+        if (in.size() != 2)
+          return ERROR_RESULT(ERR_INCORRECT_ALERT_LENGTH);
+        uint8_t wire_level;
+        in.Read(&wire_level, 1);
+        if (!IsValidAlertLevel(wire_level))
+          return ERROR_RESULT(ERR_INVALID_ALERT_LEVEL);
+        const AlertLevel level = static_cast<AlertLevel>(level);
+        if (level == ALERT_LEVEL_WARNING)
+          continue;  // FIXME: what to do about warnings?
+        uint8_t alert_type;
+        in.Read(&alert_type, 1);
+      *used = buf.TellBytes();
+        return AlertTypeToResult(static_cast<AlertType>(alert_type));
+      }
+      case RECORD_CHANGE_CIPHER_SPEC:
+        r = ProcessHandshakeMessage(priv_, CHANGE_CIPHER_SPEC, &in);
+        if (r)
+          return r;
+        *used = buf.TellBytes();
+        break;
+      case RECORD_HANDSHAKE:
+        r = ProcessHandshakeMessage(priv_, htype, &in);
+        if (r)
+          return r;
+        *used = buf.TellBytes();
+        break;
+      default:
+        assert(false);
+    }
+  }
 }
 
 }  // namespace tlsclient

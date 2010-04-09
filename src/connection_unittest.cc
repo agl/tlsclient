@@ -5,9 +5,10 @@
 #include "tlsclient/public/connection.h"
 #include "tlsclient/public/context.h"
 
-#include <errno.h>
-#include <sys/socket.h>
 #include <arpa/inet.h>
+#include <errno.h>
+#include <stdio.h>
+#include <sys/socket.h>
 
 #include <gtest/gtest.h>
 
@@ -18,20 +19,24 @@ namespace {
 class ConnectionTest : public ::testing::Test {
  protected:
   virtual void SetUp() {
-    const int server = socket(AF_INET, SOCK_STREAM, 0);
-    assert(server >= 0);
+    const int listener = socket(AF_INET, SOCK_STREAM, 0);
+    assert(listener >= 0);
     struct sockaddr_in sin;
     memset(&sin, 0, sizeof(sin));
     sin.sin_family = PF_INET;
-    assert(bind(server, (struct sockaddr*) &sin, sizeof(sin)) == 0);
+    assert(bind(listener, (struct sockaddr*) &sin, sizeof(sin)) == 0);
     socklen_t socklen = sizeof(sin);
-    assert(getsockname(server, (struct sockaddr*) &sin, &socklen) == 0);
+    assert(getsockname(listener, (struct sockaddr*) &sin, &socklen) == 0);
     assert(socklen == sizeof(sin));
-    assert(listen(server, 1) == 0);
+    assert(listen(listener, 1) == 0);
 
     const int client = socket(AF_INET, SOCK_STREAM, 0);
-    assert(server >= 0);
+    assert(client >= 0);
     assert(connect(client, (struct sockaddr*) &sin, sizeof(sin)) == 0);
+
+    const int server = accept(listener, NULL, NULL);
+    assert(server >= 0);
+    close(listener);
 
     child_ = fork();
     if (child_ == 0) {
@@ -75,12 +80,12 @@ class TestingContext : public Context {
     return 513;
   }
 
-  Certificate* ParseRSACertificate(const uint8_t* bytes, size_t length) {
+  Certificate* ParseCertificate(const uint8_t* bytes, size_t length) {
     return NULL;
   }
 };
 
-TEST_F(ConnectionTest, Basic) {
+TEST_F(ConnectionTest, DISABLED_Basic) {
   TestingContext ctx;
   Connection conn(&ctx);
 
@@ -97,26 +102,52 @@ TEST_F(ConnectionTest, Basic) {
   std::vector<struct iovec> iovs;
 
   for (;;) {
-    static const size_t kBufferLength = 10;
+    static const size_t kBufferLength = 1;
     uint8_t* buf = new uint8_t[kBufferLength];
     struct iovec iov, *out_iov;
     iov.iov_base = buf;
     unsigned out_n;
     size_t used;
 
+    ssize_t n;
     for (;;) {
-      const ssize_t r = read(client_, buf, kBufferLength);
-      if (r == -1) {
+      n = read(client_, buf, kBufferLength);
+      if (n == -1) {
         if (errno == EINTR)
           continue;
         ASSERT_EQ(errno, EINTR);
         return;
       }
-      iov.iov_len = r;
+      break;
+    }
 
-      iovs.push_back(iov);
+    if (!n)
+      return; // FIXME
 
-      ASSERT_EQ(0, conn.Process(&out_iov, &out_n, &used, &iovs[0], iovs.size()));
+    iov.iov_len = n;
+    iovs.push_back(iov);
+
+    Result r = conn.Process(&out_iov, &out_n, &used, &iovs[0], iovs.size());
+    if (r) {
+      char filename[8];
+      FilenameFromResult(filename, r);
+      fprintf(stderr, "%s:%d %s\n", filename, LineNumberFromResult(r), StringFromResult(r));
+    }
+    ASSERT_EQ(0, ErrorCodeFromResult(r));
+
+    // Need to remove the consumed bytes from the buffer.
+    while (used) {
+      assert(iovs.size() > 0);
+      if (used >= iovs[0].iov_len) {
+        uint8_t* base = static_cast<uint8_t*>(iovs[0].iov_base) - (kBufferLength - iovs[0].iov_len);
+        delete[] base;
+        used -= iovs[0].iov_len;
+        iovs.erase(iovs.begin());
+      } else {
+        iovs[0].iov_base = static_cast<uint8_t*>(iovs[0].iov_base) + used;
+        iovs[0].iov_len -= used;
+        used -= used;
+      }
     }
   }
 }

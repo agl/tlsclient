@@ -12,6 +12,7 @@ namespace tlsclient {
 
 struct ConnectionPrivate;
 class Context;
+class Buffer;
 
 class Connection {
  public:

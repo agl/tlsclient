@@ -45,6 +45,16 @@ class Buffer {
     return pos_;
   }
 
+  size_t TellBytes() const {
+    size_t r = 0;
+    for (unsigned i = 0; i < pos_.i; i++) {
+      r += iov_[i].iov_len;
+    }
+    r += pos_.offset;
+
+    return r;
+  }
+
   bool Seek(const Pos& pos) {
     if (pos.i < len_ && pos.offset >= iov_[pos.i].iov_len) {
       return false;
@@ -56,6 +66,29 @@ class Buffer {
 
     pos_ = pos;
     return true;
+  }
+
+  void Advance(size_t nbytes) {
+    while (nbytes && pos_.i < len_) {
+      size_t n = iov_[pos_.i].iov_len - pos_.offset;
+      if (n > nbytes)
+        n = nbytes;
+      nbytes -= n;
+
+      if (nbytes) {
+        pos_.i++;
+        pos_.offset = 0;
+      } else {
+        pos_.offset += n;
+        if (pos_.offset == iov_[pos_.i].iov_len) {
+          pos_.i++;
+          pos_.offset = 0;
+        }
+        break;
+      }
+    }
+
+    assert(!nbytes);
   }
 
   size_t size() const {
@@ -80,14 +113,18 @@ class Buffer {
 
   Buffer SubString(size_t len) const {
     std::vector<struct iovec> iovs;
-    ReadV(&iovs, len);
+    const bool b = PeekV(&iovs, len);
+    assert(b);
     struct iovec *iovs_copy = new struct iovec[iovs.size()];
     memcpy(&iovs_copy[0], &iovs[0], sizeof(struct iovec) * iovs.size());
     return Buffer(&iovs_copy[0], iovs.size(), true);
   }
 
-  void ReadV(std::vector<struct iovec>* out, size_t len) const {
+  bool PeekV(std::vector<struct iovec>* out, size_t len) const {
     Pos pos(pos_);
+
+    if (!len)
+      return true;
 
     while (len && pos.i < len_) {
       size_t n = iov_[pos.i].iov_len - pos.offset;
@@ -104,7 +141,8 @@ class Buffer {
       }
     }
 
-    assert(!len);
+    if (len)
+      return false;
 
     const unsigned num_iovs = pos.i - pos_.i + 1;
     const size_t old_out_size = out->size();
@@ -124,6 +162,8 @@ class Buffer {
       iovs[num_iovs - 1].iov_base = iov_[pos.i].iov_base;
       iovs[num_iovs - 1].iov_len = pos.offset;
     }
+
+    return true;
   }
 
   bool Read(void* out, size_t len) {
@@ -159,7 +199,72 @@ class Buffer {
     return false;
   }
 
+  uint8_t* Get(uint8_t* out, size_t len) {
+    if (pos_.i == len_)
+      return NULL;
+
+    const size_t remaining_in_current_chunk = iov_[pos_.i].iov_len - pos_.offset;
+    if (remaining_in_current_chunk < len) {
+      if (Read(out, len))
+        return out;
+      return NULL;
+    }
+
+    uint8_t* const ret = static_cast<uint8_t*>(iov_[pos_.i].iov_base) + pos_.offset;
+    pos_.offset += len;
+    if (pos_.offset == iov_[pos_.i].iov_len) {
+      pos_.i++;
+      pos_.offset = 0;
+    }
+
+    return ret;
+  }
+
+  bool U8(uint8_t* out) {
+    return Read(out, 1);
+  }
+
+  bool U16(uint16_t* out) {
+    uint8_t buf[2], *u16;
+    u16 = Get(buf, 2);
+    if (!u16)
+      return false;
+    *out = static_cast<uint16_t>(u16[0]) << 8 | u16[1];
+    return true;
+  }
+
+  Buffer VariableLength(bool* ok, unsigned len_size) {
+    assert(len_size > 0 && len_size <= 4);
+    uint8_t temp[4], *lenbuffer;
+    uint32_t len = 0;
+
+    *ok = false;
+    lenbuffer = Get(temp, len_size);
+    if (!lenbuffer)
+      return Buffer();
+    for (unsigned i = 0; i < len_size; i++) {
+      len <<= 8;
+      len |= lenbuffer[i];
+    }
+
+    if (remaining() < len)
+      return Buffer();
+    std::vector<struct iovec> iovs;
+    PeekV(&iovs, len);
+    Advance(len);
+    *ok = true;
+    struct iovec *iovs_copy = new struct iovec[iovs.size()];
+    memcpy(&iovs_copy[0], &iovs[0], sizeof(struct iovec) * iovs.size());
+    return Buffer(&iovs_copy[0], iovs.size(), true);
+  }
+
  private:
+  Buffer()
+      : iov_(NULL),
+        len_(0),
+        delete_(false) {
+  }
+
   Buffer(const struct iovec *iov, unsigned len, bool del)
       : iov_(iov),
         len_(len),

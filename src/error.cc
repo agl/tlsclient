@@ -5,6 +5,7 @@
 #include "tlsclient/public/error.h"
 
 #include <stdint.h>
+#include <string.h>
 
 namespace tlsclient {
 
@@ -19,6 +20,46 @@ static const char kErrorStrings[][70] = {
   "A incomplete handshake message was followed by a non-handshake record",
   "Encountered a handshake message with an unknown type",
   "Encountered a handshake message which was too long to process",
+  "Encountered an alert record with an incorrect length",
+  "Encountered an invalid alert level",
+
+  // Alerts
+  "Received fatal alert from peer: close_notify",
+  "Received fatal alert from peer: unexpected_message",
+  "Received fatal alert from peer: bad_record_mac",
+  "Received fatal alert from peer: decryption_failed",
+  "Received fatal alert from peer: handshake_failure",
+  "Received fatal alert from peer: no_certificate",
+  "Received fatal alert from peer: bad_certificate",
+  "Received fatal alert from peer: unsupported_certificate",
+  "Received fatal alert from peer: certificate_revoked",
+  "Received fatal alert from peer: certificate_expired",
+  "Received fatal alert from peer: certificate_unknown",
+  "Received fatal alert from peer: illegal_parameter",
+  "Received fatal alert from peer: unknown_ca",
+  "Received fatal alert from peer: access_denied",
+  "Received fatal alert from peer: decode_error",
+  "Received fatal alert from peer: export_restriction",
+  "Received fatal alert from peer: protocol_version",
+  "Received fatal alert from peer: insufficient_security",
+  "Received fatal alert from peer: internal_error",
+  "Received fatal alert from peer: user_canceled",
+  "Received fatal alert from peer: no_renegotiation",
+  "Received fatal alert from peer: unsupported_extension",
+  "Received unknown fatal alert from peer",
+
+  "Received an application data record before the server verified itself",
+  "Encountered a handshake message that was unexpected in this state",
+  "Encountered corruption while processing a handshake message",
+  "The server responded with an unsupported protocol version",
+  "The server selected an unsupported/disabled cipher suite",
+  "The server selected an unsupported/disabled compression method",
+  "The server returned an unknown ServerHello extension",
+  "Encountered a handshake message with unknown trailing data",
+  "Context::ParseCertificate failed to parse the server's certificate",
+
+  // Remember to add an element to the enum in public/error.h!
+
   ""
 };
 
@@ -59,6 +100,10 @@ const char *StringFromErrorCode(ErrorCode e) {
 
 Result ErrorResult(const char* filename, unsigned line_no, ErrorCode e) {
   Result r = 0;
+
+  const char* basename = strrchr(filename, '/');
+  if (basename)
+    filename = basename + 1;
 
   unsigned i;
   for (i = 0; *filename && i < 7; filename++, i++) {

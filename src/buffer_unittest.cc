@@ -4,6 +4,8 @@
 
 #include "tlsclient/public/buffer.h"
 
+#include <vector>
+
 #include <gtest/gtest.h>
 
 using namespace tlsclient;
@@ -85,6 +87,26 @@ TEST_F(BufferTest, TwoBlock) {
   ASSERT_TRUE(memcmp(kTestString2, buf + sizeof(kTestString1), sizeof(kTestString2)) == 0);
 }
 
+TEST_F(BufferTest, Advance) {
+  static const char kTestString1[] = "hello";
+  static const char kTestString2[] = "world";
+  struct iovec iov[2] = {
+    {const_cast<char*>(kTestString1), sizeof(kTestString1)},
+    {const_cast<char*>(kTestString2), sizeof(kTestString2)},
+  };
+  Buffer b(iov, 2);
+  char c;
+
+  b.Advance(1);
+  ASSERT_TRUE(b.Read(&c, 1));
+  ASSERT_EQ('e', c);
+  b.Advance(5);
+  ASSERT_TRUE(b.Read(&c, 1));
+  ASSERT_EQ('o', c);
+  b.Advance(4);
+  ASSERT_FALSE(b.Read(&c, 1));
+}
+
 static void CheckSubstring(const Buffer& in, size_t len, const char* expected) {
   char c;
   Buffer b = in.SubString(len);
@@ -92,6 +114,7 @@ static void CheckSubstring(const Buffer& in, size_t len, const char* expected) {
   ASSERT_EQ(len, b.size());
   ASSERT_EQ(len, b.remaining());
   for (size_t i = 0; i < len; i++) {
+    ASSERT_EQ(i, b.TellBytes());
     ASSERT_EQ(len - i, b.remaining());
     ASSERT_TRUE(b.Read(&c, 1));
     ASSERT_EQ(len, b.size());
@@ -192,6 +215,59 @@ TEST_F(BufferTest, SubString5) {
   CheckSubstring(b, 6, "ruel\x00w");
   CheckSubstring(b, 7, "ruel\x00wo");
   CheckSubstring(b, 11, "ruel\x00world");
+}
+
+TEST_F(BufferTest, Get) {
+  static const char kTestString1[] = "hello";
+  static const char kTestString2[] = "world";
+  struct iovec iov[2] = {
+    {const_cast<char*>(kTestString1), sizeof(kTestString1)},
+    {const_cast<char*>(kTestString2), sizeof(kTestString2)},
+  };
+  Buffer b(iov, 2);
+  uint8_t temp[32];
+
+  uint8_t* a = b.Get(temp, 5);
+  // We should be able to get a direct pointer here
+  ASSERT_NE(temp, a);
+  ASSERT_TRUE(memcmp(a, "hello", 5) == 0);
+
+  // This should be a copy because it crosses a boundary
+  a = b.Get(temp, 3);
+  ASSERT_EQ(a, temp);
+  ASSERT_TRUE(memcmp(a, "\x00wo", 3) == 0);
+
+  // This should return NULL because we don't have that much data
+  a = b.Get(temp, 30);
+  ASSERT_FALSE(a);
+}
+
+TEST_F(BufferTest, VariableLength1) {
+  static const char kTestString[] = "\x03\x01\x02\x03\x04";
+  struct iovec iov = {const_cast<char*>(kTestString), sizeof(kTestString) - 1};
+  Buffer b(&iov, 1);
+  uint8_t temp[3];
+  bool ok;
+
+  Buffer b2(b.VariableLength(&ok, 1));
+  ASSERT_TRUE(ok);
+  ASSERT_EQ(3, b2.size());
+  ASSERT_EQ(b.remaining(), 1);
+  ASSERT_TRUE(memcmp(b2.Get(temp, 3), "\x01\x02\x03", 3) == 0);
+}
+
+TEST_F(BufferTest, VariableLength2) {
+  static const char kTestString[] = "\x00\x03\x01\x02\x03\x04";
+  struct iovec iov = {const_cast<char*>(kTestString), sizeof(kTestString) - 1};
+  Buffer b(&iov, 1);
+  uint8_t temp[3];
+  bool ok;
+
+  Buffer b2(b.VariableLength(&ok, 2));
+  ASSERT_TRUE(ok);
+  ASSERT_EQ(3, b2.size());
+  ASSERT_EQ(b.remaining(), 1);
+  ASSERT_TRUE(memcmp(b2.Get(temp, 3), "\x01\x02\x03", 3) == 0);
 }
 
 }  // anonymous namespace
