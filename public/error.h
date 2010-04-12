@@ -71,6 +71,9 @@ enum ErrorCode {
   ERR_UNKNOWN_EXTENSION = 41,
   ERR_HANDSHAKE_TRAILING_DATA = 42,
   ERR_CANNOT_PARSE_CERTIFICATE = 43,
+  ERR_SIZE_ENCRYPT_PKCS1_FAILED = 44,
+  ERR_ENCRYPT_PKCS1_FAILED = 45,
+  ERR_INTERNAL_ERROR = 46,
 
   // Remember to add the string to the array in src/error.cc!
 

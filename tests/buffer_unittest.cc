@@ -22,14 +22,14 @@ TEST_F(BufferTest, Leak) {
 
 TEST_F(BufferTest, Empty) {
   Buffer b(NULL, 0);
-  ASSERT_EQ(0, b.size());
-  ASSERT_EQ(0, b.remaining());
+  ASSERT_EQ(0u, b.size());
+  ASSERT_EQ(0u, b.remaining());
   const Buffer::Pos pos = b.Tell();
   ASSERT_TRUE(b.Seek(pos));
 
   b.Rewind();
-  ASSERT_EQ(0, b.size());
-  ASSERT_EQ(0, b.remaining());
+  ASSERT_EQ(0u, b.size());
+  ASSERT_EQ(0u, b.remaining());
 }
 
 TEST_F(BufferTest, OneBlock) {
@@ -251,8 +251,8 @@ TEST_F(BufferTest, VariableLength1) {
 
   Buffer b2(b.VariableLength(&ok, 1));
   ASSERT_TRUE(ok);
-  ASSERT_EQ(3, b2.size());
-  ASSERT_EQ(b.remaining(), 1);
+  ASSERT_EQ(3u, b2.size());
+  ASSERT_EQ(1u, b.remaining());
   ASSERT_TRUE(memcmp(b2.Get(temp, 3), "\x01\x02\x03", 3) == 0);
 }
 
@@ -265,8 +265,8 @@ TEST_F(BufferTest, VariableLength2) {
 
   Buffer b2(b.VariableLength(&ok, 2));
   ASSERT_TRUE(ok);
-  ASSERT_EQ(3, b2.size());
-  ASSERT_EQ(b.remaining(), 1);
+  ASSERT_EQ(3u, b2.size());
+  ASSERT_EQ(1u, b.remaining());
   ASSERT_TRUE(memcmp(b2.Get(temp, 3), "\x01\x02\x03", 3) == 0);
 }
 

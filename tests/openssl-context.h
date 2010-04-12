@@ -10,9 +10,9 @@
 
 class OpenSSLContext : public tlsclient::Context {
  public:
-  virtual bool RandomBytes(void*, size_t) = 0;
-  virtual uint64_t EpochSeconds() = 0;
-  virtual Certificate* ParseCertificate(const uint8_t* bytes, size_t length) = 0;
+  virtual bool RandomBytes(void*, size_t);
+  virtual uint64_t EpochSeconds();
+  virtual tlsclient::Certificate* ParseCertificate(const uint8_t* bytes, size_t length);
 };
 
 #endif  // TLSCLIENT_OPENSSL_CONTEXT_H

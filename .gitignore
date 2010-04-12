@@ -2,3 +2,4 @@ Makefile
 *.Makefile
 *.mk
 /out
+*.swp

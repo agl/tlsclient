@@ -27,7 +27,7 @@ TEST_F(ArenaTest, Leak) {
   a.Allocate(1000);
   a.Allocate(1000);
 
-  ASSERT_LE(6000, a.bytes_allocated());
+  ASSERT_LE(6000u, a.bytes_allocated());
 }
 
 TEST_F(ArenaTest, Free) {
@@ -41,7 +41,7 @@ TEST_F(ArenaTest, Free) {
   a.Allocate(1000);
 
   a.Free(ptr);
-  ASSERT_LE(5000, a.bytes_allocated());
+  ASSERT_LE(5000u, a.bytes_allocated());
 }
 
 TEST_F(ArenaTest, Free2) {
@@ -61,7 +61,7 @@ TEST_F(ArenaTest, Realloc) {
   void* const p = a.Allocate(10);
   a.Realloc(p, 10000);
 
-  ASSERT_GE(10000, a.bytes_allocated());
+  ASSERT_GE(10000u, a.bytes_allocated());
 }
 
 TEST_F(ArenaTest, Realloc2) {

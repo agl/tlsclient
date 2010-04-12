@@ -13,10 +13,8 @@ class Certificate {
  public:
   virtual ~Certificate() { }
 
-  virtual unsigned size() = 0;
-
   virtual bool EncryptPKCS1(uint8_t* output, uint8_t* bytes, size_t length) = 0;
-  virtual unsigned SizeEncryptPKCS1(size_t length) = 0;
+  virtual size_t SizeEncryptPKCS1() = 0;
 };
 
 class Context {

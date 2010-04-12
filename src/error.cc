@@ -57,6 +57,9 @@ static const char kErrorStrings[][70] = {
   "The server returned an unknown ServerHello extension",
   "Encountered a handshake message with unknown trailing data",
   "Context::ParseCertificate failed to parse the server's certificate",
+  "Certificate::SizeEncryptPKCS1 failed",
+  "Certificate::EncryptPKCS1 failed",
+  "An internal error occured (sorry, my fault!)",
 
   // Remember to add an element to the enum in public/error.h!
 

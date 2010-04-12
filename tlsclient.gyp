@@ -3,7 +3,7 @@
   },
 
   'target_defaults': {
-    'cflags': ['-Wall', '-ggdb', '-Werror'],
+    'cflags': ['-Wall', '-g', '-Werror', '-I/home/agl/include'],
   },
 
   'targets': [
@@ -19,6 +19,10 @@
         'src/extension.cc',
         'src/handshake.cc',
         'src/record.cc',
+        'src/crypto/md5/md5.cc',
+        'src/crypto/prf/prf.cc',
+        'src/crypto/rc4/rc4.cc',
+        'src/crypto/sha1/sha1.cc',
       ],
     },
 
@@ -34,15 +38,26 @@
         'tests/connection_unittest.cc',
         'tests/error_unittest.cc',
         'tests/handshake_unittest.cc',
+        'tests/hmac_unittest.cc',
+        'tests/md5_unittest.cc',
+        'tests/openssl-context.cc',
+        'tests/prf_unittest.cc',
+        'tests/rc4_unittest.cc',
+        'tests/sha1_unittest.cc',
         'tests/sink_unittest.cc',
+        'tests/util.cc',
       ],
       'dependencies': [
         'libtlsclient',
       ],
       'ldflags': [
+        '-L/home/agl/lib',
+        '-lpthread',
         '-lgtest',
         '-lgtest_main',
+        '-lcrypto',
       ],
+      # 'defines': ['GTEST_USE_OWN_TR1_TUPLE=1'],
     },
 
     {

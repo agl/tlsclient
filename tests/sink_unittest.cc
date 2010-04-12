@@ -16,14 +16,14 @@ class SinkTest : public ::testing::Test {
 TEST_F(SinkTest, Empty) {
   Arena a;
   Sink s(&a);
-  ASSERT_EQ(0, s.size());
+  ASSERT_EQ(0u, s.size());
 }
 
 TEST_F(SinkTest, U8) {
   Arena a;
   Sink s(&a);
   s.U8(42);
-  ASSERT_EQ(1, s.size());
+  ASSERT_EQ(1u, s.size());
   ASSERT_EQ(42, s.data()[0]);
 }
 
@@ -31,7 +31,7 @@ TEST_F(SinkTest, U16) {
   Arena a;
   Sink s(&a);
   s.U16(0x0201);
-  ASSERT_EQ(2, s.size());
+  ASSERT_EQ(2u, s.size());
   ASSERT_EQ(2, s.data()[0]);
   ASSERT_EQ(1, s.data()[1]);
 }
@@ -40,7 +40,7 @@ TEST_F(SinkTest, U24) {
   Arena a;
   Sink s(&a);
   s.U24(0x030201);
-  ASSERT_EQ(3, s.size());
+  ASSERT_EQ(3u, s.size());
   ASSERT_EQ(3, s.data()[0]);
   ASSERT_EQ(2, s.data()[1]);
   ASSERT_EQ(1, s.data()[2]);
@@ -50,7 +50,7 @@ TEST_F(SinkTest, U32) {
   Arena a;
   Sink s(&a);
   s.U32(0x04030201);
-  ASSERT_EQ(4, s.size());
+  ASSERT_EQ(4u, s.size());
   ASSERT_EQ(4, s.data()[0]);
   ASSERT_EQ(3, s.data()[1]);
   ASSERT_EQ(2, s.data()[2]);
@@ -61,7 +61,7 @@ TEST_F(SinkTest, Append) {
   Arena a;
   Sink s(&a);
   s.Append(reinterpret_cast<const uint8_t*>("testing"), 8);
-  ASSERT_EQ(8, s.size());
+  ASSERT_EQ(8u, s.size());
   ASSERT_EQ('t', s.data()[0]);
   ASSERT_EQ('e', s.data()[1]);
   ASSERT_EQ('s', s.data()[2]);
@@ -97,7 +97,7 @@ TEST_F(SinkTest, VariableBlock1) {
   }
   s.U8(5);
 
-  ASSERT_EQ(5, s.size());
+  ASSERT_EQ(5u, s.size());
   ASSERT_TRUE(0 == memcmp(s.data(), "\x01\x02\x03\x04\x05", 5));
 }
 
@@ -113,7 +113,7 @@ TEST_F(SinkTest, VariableBlock2) {
   }
   s.U8(5);
 
-  ASSERT_EQ(6, s.size());
+  ASSERT_EQ(6u, s.size());
   ASSERT_TRUE(0 == memcmp(s.data(), "\x01\x00\x02\x03\x04\x05", 6));
 }
 
@@ -129,7 +129,7 @@ TEST_F(SinkTest, VariableBlock4) {
   }
   s.U8(5);
 
-  ASSERT_EQ(8, s.size());
+  ASSERT_EQ(8u, s.size());
   ASSERT_TRUE(0 == memcmp(s.data(), "\x01\x00\x00\x00\x02\x03\x04\x05", 8));
 }
 
@@ -143,7 +143,7 @@ TEST_F(SinkTest, Record) {
     s2.U8(5);
   }
 
-  ASSERT_EQ(10, sink.size());
+  ASSERT_EQ(10u, sink.size());
   ASSERT_TRUE(0 == memcmp(sink.data(), "\x16\x03\x00\x00\x05\x0f\x00\x00\x01\x05", 10));
 }
 

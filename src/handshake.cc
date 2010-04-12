@@ -10,6 +10,7 @@
 #include "tlsclient/public/error.h"
 #include "tlsclient/src/base-internal.h"
 #include "tlsclient/src/buffer.h"
+#include "tlsclient/src/crypto/prf/prf.h"
 #include "tlsclient/src/connection_private.h"
 #include "tlsclient/src/error-internal.h"
 #include "tlsclient/src/extension.h"
@@ -20,9 +21,13 @@ namespace tlsclient {
 // RFC 5746, section 3.3
 static const uint16_t kSignalingCipherSuiteValue = 0xff00;
 
+CipherSpec* CreateRC4SHA(const KeyBlock& kb) {
+  return NULL;
+}
+
 static const CipherSuite kCipherSuites[] = {
   { CIPHERSUITE_RSA | CIPHERSUITE_RC4 | CIPHERSUITE_SHA,
-    0x0005, "TLS_RSA_WITH_RC4_128_SHA"},
+    0x0005, "TLS_RSA_WITH_RC4_128_SHA", 16, 20, 0, CreateRC4SHA},
 };
 
 bool IsValidHandshakeType(uint8_t type) {
@@ -247,13 +252,15 @@ Result MarshallClientHello(Sink* sink, ConnectionPrivate* priv) {
   if (!now)
     return ERROR_RESULT(ERR_EPOCH_SECONDS_FAILED);
 
-  uint8_t rnd[28];
-  if (!priv->ctx->RandomBytes(rnd, sizeof(rnd)))
+  priv->client_random[0] = now >> 24;
+  priv->client_random[1] = now >> 16;
+  priv->client_random[2] = now >> 8;
+  priv->client_random[3] = now;
+  if (!priv->ctx->RandomBytes(priv->client_random + 4, sizeof(priv->client_random) - 4))
     return ERROR_RESULT(ERR_RANDOM_BYTES_FAILED);
 
   sink->U16(TLSVersionToOffer(priv));
-  sink->U32(now);
-  sink->Append(rnd, sizeof(rnd));
+  sink->Append(priv->client_random, sizeof(priv->client_random));
 
   sink->U8(0);  // no session resumption for the moment.
 
@@ -300,12 +307,34 @@ Result MarshallClientKeyExchange(Sink* sink, ConnectionPrivate* priv) {
   const uint16_t offered_version = TLSVersionToOffer(priv);
   premaster_secret[0] = offered_version >> 8;
   premaster_secret[1] = offered_version;
-  // const bool is_sslv3 = priv->version == SSLv3;
+  const bool is_sslv3 = priv->version == SSLv3;
 
   if (!priv->ctx->RandomBytes(&premaster_secret[2], sizeof(premaster_secret) - 2))
     return ERROR_RESULT(ERR_RANDOM_BYTES_FAILED);
 
+  const size_t encrypted_premaster_size = priv->server_cert->SizeEncryptPKCS1();
+  if (!encrypted_premaster_size)
+    return ERROR_RESULT(ERR_SIZE_ENCRYPT_PKCS1_FAILED);
+
   // SSLv3 doesn't prefix the encrypted premaster secret with length bytes.
+  Sink s(sink->VariableLengthBlock(is_sslv3 ? 0 : 2));
+  uint8_t* encrypted_premaster_secret = s.Block(encrypted_premaster_size);
+  if (!priv->server_cert->EncryptPKCS1(encrypted_premaster_secret, premaster_secret, sizeof(premaster_secret)))
+    return ERROR_RESULT(ERR_ENCRYPT_PKCS1_FAILED);
+
+  KeyBlock kb;
+  kb.key_len = priv->cipher_suite->key_len;
+  kb.mac_len = priv->cipher_suite->mac_len;
+  kb.iv_len = priv->cipher_suite->iv_len;
+
+  if (!KeysFromPreMasterSecret(priv->version, &kb, premaster_secret, sizeof(premaster_secret), priv->client_random, priv->server_random))
+    return ERROR_RESULT(ERR_INTERNAL_ERROR);
+
+  memcpy(priv->master_secret, kb.master_secret, sizeof(priv->master_secret));
+  delete priv->pending_read_cipher_spec;
+  delete priv->pending_write_cipher_spec;
+  priv->pending_read_cipher_spec = priv->pending_write_cipher_spec = priv->cipher_suite->create(kb);
+
   return 0;
 }
 

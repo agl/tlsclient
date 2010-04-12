@@ -18,22 +18,22 @@ TEST_F(ErrorTest, Basic) {
   char filename[8];
 
   const Result r1 = ErrorResult("", 0, ERR_SUCCESS);
-  ASSERT_EQ(0, LineNumberFromResult(r1));
+  ASSERT_EQ(0u, LineNumberFromResult(r1));
   ASSERT_EQ(ERR_SUCCESS, ErrorCodeFromResult(r1));
   FilenameFromResult(filename, r1);
   ASSERT_EQ(0, filename[0]);
 
   const Result r2 = ErrorResult("", 1, ERR_SUCCESS);
-  ASSERT_EQ(1, LineNumberFromResult(r2));
+  ASSERT_EQ(1u, LineNumberFromResult(r2));
 
   const Result r3 = ErrorResult("", 4094, ERR_SUCCESS);
-  ASSERT_EQ(4094, LineNumberFromResult(r3));
+  ASSERT_EQ(4094u, LineNumberFromResult(r3));
 
   const Result r4 = ErrorResult("", 4095, ERR_SUCCESS);
-  ASSERT_EQ(4095, LineNumberFromResult(r4));
+  ASSERT_EQ(4095u, LineNumberFromResult(r4));
 
   const Result r5 = ErrorResult("", 10000, ERR_SUCCESS);
-  ASSERT_EQ(4095, LineNumberFromResult(r5));
+  ASSERT_EQ(4095u, LineNumberFromResult(r5));
 
   const Result r6 = ErrorResult("test", 0, ERR_SUCCESS);
   FilenameFromResult(filename, r6);

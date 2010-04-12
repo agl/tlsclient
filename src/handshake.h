@@ -96,6 +96,26 @@ enum {
   CIPHERSUITE_SHA = 1 << 2,
 };
 
+struct KeyBlock {
+  enum {
+    MAX_LEN = 32,
+  };
+
+  unsigned key_len, mac_len, iv_len;
+  uint8_t master_secret[48];
+  uint8_t client_key[MAX_LEN];
+  uint8_t server_key[MAX_LEN];
+  uint8_t client_mac[MAX_LEN];
+  uint8_t server_mac[MAX_LEN];
+  uint8_t client_iv[MAX_LEN];
+  uint8_t server_iv[MAX_LEN];
+};
+
+class CipherSpec {
+ public:
+  virtual ~CipherSpec() { }
+};
+
 struct CipherSuite {
   // A bitmask of CIPHERSUITE_ flags. When considering ciphersuites the
   // Connection has a corresponding bitmask of enabled flags and only those
@@ -105,14 +125,21 @@ struct CipherSuite {
   uint16_t value;
   // The name as given in the RFCs
   char name[64];
+  // The sizes of the pieces of key material needed.
+  unsigned key_len, mac_len, iv_len;
+  // create is a factory function to create a new CipherSpec for this cipher
+  // suite and the given key material. The KeyBlock must already be filled out
+  // with the correct amount of key material.
+  CipherSpec* (*create) (const KeyBlock&);
 };
 
 class Sink;
-class ConnectionPrivate;
+struct ConnectionPrivate;
 class Buffer;
 
 bool IsValidAlertLevel(uint8_t wire_level);
 Result MarshallClientHello(Sink* sink, ConnectionPrivate* priv);
+Result MarshallClientKeyExchange(Sink* sink, ConnectionPrivate* priv);
 Result GetHandshakeMessage(bool* found, HandshakeMessage* htype, std::vector<struct iovec>* out, Buffer* in);
 Result GetRecordOrHandshake(bool* found, RecordType* type, HandshakeMessage* htype, std::vector<struct iovec>* out, Buffer* in, ConnectionPrivate* priv);
 Result AlertTypeToResult(AlertType);

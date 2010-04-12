@@ -10,7 +10,7 @@
 
 namespace tlsclient {
 
-class ConnectionPrivate;
+struct ConnectionPrivate;
 class Buffer;
 class Sink;
 

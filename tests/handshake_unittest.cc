@@ -134,17 +134,17 @@ TEST_F(HandshakeTest, GetHandshakeMessageIncomplete) {
   std::vector<struct iovec> out;
 
   const Result r = GetHandshakeMessage(&found, &htype, &out, &in);
-  ASSERT_EQ(0, r);
+  ASSERT_EQ(0u, r);
   ASSERT_FALSE(found);
 
   iov.iov_len++;
   in.Rewind();
   const Result r2 = GetHandshakeMessage(&found, &htype, &out, &in);
-  ASSERT_EQ(0, r2);
+  ASSERT_EQ(0u, r2);
   ASSERT_TRUE(found);
   ASSERT_EQ(CLIENT_HELLO, htype);
-  ASSERT_EQ(1, out.size());
-  ASSERT_EQ(1, out[0].iov_len);
+  ASSERT_EQ(1u, out.size());
+  ASSERT_EQ(1u, out[0].iov_len);
   ASSERT_EQ(0, static_cast<uint8_t*>(out[0].iov_base)[0]);
 }
 
@@ -210,8 +210,8 @@ TEST_F(HandshakeTest, GetAlert) {
   ASSERT_EQ(0, ErrorCodeFromResult(r));
   ASSERT_TRUE(found);
   ASSERT_EQ(RECORD_ALERT, type);
-  ASSERT_EQ(1, out.size());
-  ASSERT_EQ(2, out[0].iov_len);
+  ASSERT_EQ(1u, out.size());
+  ASSERT_EQ(2u, out[0].iov_len);
   ASSERT_EQ(1, static_cast<uint8_t*>(out[0].iov_base)[0]);
   ASSERT_EQ(2, static_cast<uint8_t*>(out[0].iov_base)[1]);
   ASSERT_TRUE(priv.version_established);
@@ -234,8 +234,8 @@ TEST_F(HandshakeTest, GetSimpleHandshake) {
   ASSERT_TRUE(found);
   ASSERT_EQ(RECORD_HANDSHAKE, type);
   ASSERT_EQ(CLIENT_HELLO, htype);
-  ASSERT_EQ(1, out.size());
-  ASSERT_EQ(1, out[0].iov_len);
+  ASSERT_EQ(1u, out.size());
+  ASSERT_EQ(1u, out[0].iov_len);
   ASSERT_EQ(1, static_cast<uint8_t*>(out[0].iov_base)[0]);
   ASSERT_TRUE(priv.version_established);
   ASSERT_EQ(SSLv3, priv.version);
@@ -276,7 +276,7 @@ TEST_F(HandshakeTest, GetSplitHandshake) {
 
   // It's easier to put the output into a Buffer here.
   Buffer buf(&out[0], out.size());
-  ASSERT_EQ(1, buf.size());
+  ASSERT_EQ(1u, buf.size());
   char c;
   ASSERT_TRUE(buf.Read(&c, 1));
   ASSERT_EQ(5, c);
@@ -314,8 +314,8 @@ TEST_F(HandshakeTest, GetMultiHandshake) {
   ASSERT_TRUE(found);
   ASSERT_EQ(RECORD_HANDSHAKE, type);
   ASSERT_EQ(CLIENT_HELLO, htype);
-  ASSERT_EQ(1, out.size());
-  ASSERT_EQ(1, out[0].iov_len);
+  ASSERT_EQ(1u, out.size());
+  ASSERT_EQ(1u, out[0].iov_len);
   ASSERT_EQ(5, static_cast<uint8_t*>(out[0].iov_base)[0]);
 
   out.clear();
@@ -324,8 +324,8 @@ TEST_F(HandshakeTest, GetMultiHandshake) {
   ASSERT_TRUE(found);
   ASSERT_EQ(RECORD_HANDSHAKE, type);
   ASSERT_EQ(SERVER_HELLO, htype);
-  ASSERT_EQ(1, out.size());
-  ASSERT_EQ(1, out[0].iov_len);
+  ASSERT_EQ(1u, out.size());
+  ASSERT_EQ(1u, out[0].iov_len);
   ASSERT_EQ(6, static_cast<uint8_t*>(out[0].iov_base)[0]);
 
   out.clear();
@@ -334,8 +334,8 @@ TEST_F(HandshakeTest, GetMultiHandshake) {
   ASSERT_TRUE(found);
   ASSERT_EQ(RECORD_HANDSHAKE, type);
   ASSERT_EQ(CLIENT_KEY_EXCHANGE, htype);
-  ASSERT_EQ(1, out.size());
-  ASSERT_EQ(1, out[0].iov_len);
+  ASSERT_EQ(1u, out.size());
+  ASSERT_EQ(1u, out[0].iov_len);
   ASSERT_EQ(7, static_cast<uint8_t*>(out[0].iov_base)[0]);
 
   out.clear();
@@ -343,8 +343,8 @@ TEST_F(HandshakeTest, GetMultiHandshake) {
   ASSERT_EQ(0, ErrorCodeFromResult(r));
   ASSERT_TRUE(found);
   ASSERT_EQ(RECORD_ALERT, type);
-  ASSERT_EQ(1, out.size());
-  ASSERT_EQ(1, out[0].iov_len);
+  ASSERT_EQ(1u, out.size());
+  ASSERT_EQ(1u, out[0].iov_len);
   ASSERT_EQ(8, static_cast<uint8_t*>(out[0].iov_base)[0]);
 
   r = GetRecordOrHandshake(&found, &type, &htype, &out, &in, &priv);
@@ -518,10 +518,10 @@ TEST_F(HandshakeTest, ProcessCertificate) {
 
   Result r = ProcessServerCertificate(&priv, &buf);
   ASSERT_EQ(0, ErrorCodeFromResult(r));
-  ASSERT_EQ(3, priv.server_certificates.size());
-  ASSERT_EQ(3, priv.server_certificates[0].iov_len);
-  ASSERT_EQ(3, priv.server_certificates[1].iov_len);
-  ASSERT_EQ(4, priv.server_certificates[2].iov_len);
+  ASSERT_EQ(3u, priv.server_certificates.size());
+  ASSERT_EQ(3u, priv.server_certificates[0].iov_len);
+  ASSERT_EQ(3u, priv.server_certificates[1].iov_len);
+  ASSERT_EQ(4u, priv.server_certificates[2].iov_len);
   ASSERT_TRUE(memcmp(priv.server_certificates[0].iov_base, "\x04\x05\x06", 3) == 0);
   ASSERT_TRUE(memcmp(priv.server_certificates[1].iov_base, "\x04\x05\x07", 3) == 0);
   ASSERT_TRUE(memcmp(priv.server_certificates[2].iov_base, "\x04\x05\x06\x08", 4) == 0);

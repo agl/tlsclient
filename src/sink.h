@@ -97,6 +97,13 @@ class Sink {
     buf_->offset += length;
   }
 
+  uint8_t* Block(size_t length) {
+    Ensure(length);
+    uint8_t* const ret = buf_->data + buf_->offset;
+    buf_->offset += length;
+    return ret;
+  }
+
   Sink Record(TLSVersion version, RecordType type) {
     U8(static_cast<uint8_t>(type));
 

@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 #include "tlsclient/public/connection.h"
-#include "tlsclient/public/context.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -11,6 +10,9 @@
 #include <sys/socket.h>
 
 #include <gtest/gtest.h>
+
+#include "tlsclient/public/context.h"
+#include "tlsclient/tests/openssl-context.h"
 
 using namespace tlsclient;
 
@@ -69,24 +71,29 @@ class ConnectionTest : public ::testing::Test {
   pid_t child_;
 };
 
-class TestingContext : public Context {
- public:
-  virtual bool RandomBytes(void* addr, size_t len) {
-    memset(addr, 0, len);
-    return true;
+static bool
+writea(int fd, const void* idata, size_t len) {
+  size_t done = 0;
+  const uint8_t* data = static_cast<const uint8_t*>(idata);
+
+  while (done < len) {
+    ssize_t r = write(fd, data + done, len - done);
+    if (r == -1) {
+      if (errno == EINTR)
+        continue;
+      return false;
+    } else if (r == 0) {
+      return false;
+    } else {
+      done += r;
+    }
   }
 
-  virtual uint64_t EpochSeconds() {
-    return 513;
-  }
-
-  Certificate* ParseCertificate(const uint8_t* bytes, size_t length) {
-    return NULL;
-  }
-};
+  return true;
+}
 
 TEST_F(ConnectionTest, DISABLED_Basic) {
-  TestingContext ctx;
+  OpenSSLContext ctx;
   Connection conn(&ctx);
 
   conn.EnableDefault();
@@ -95,13 +102,16 @@ TEST_F(ConnectionTest, DISABLED_Basic) {
   ASSERT_FALSE(conn.is_server_cert_available());
   ASSERT_FALSE(conn.is_ready_to_send_application_data());
 
-  struct iovec iov;
-  ASSERT_EQ(0, conn.Get(&iov));
-  ASSERT_EQ(iov.iov_len, write(client_, iov.iov_base, iov.iov_len));
-
   std::vector<struct iovec> iovs;
 
   for (;;) {
+    if (conn.need_to_write()) {
+      struct iovec out;
+      Result r = conn.Get(&out);
+      ASSERT_EQ(0, ErrorCodeFromResult(r));
+      ASSERT_TRUE(writea(client_, out.iov_base, out.iov_len));
+    }
+
     static const size_t kBufferLength = 1;
     uint8_t* buf = new uint8_t[kBufferLength];
     struct iovec iov, *out_iov;

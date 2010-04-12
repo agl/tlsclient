@@ -4,14 +4,26 @@
 
 #include "tlsclient/public/connection.h"
 
+#include "tlsclient/public/context.h"
 #include "tlsclient/public/error.h"
 #include "tlsclient/src/buffer.h"
 #include "tlsclient/src/connection_private.h"
+#include "tlsclient/src/crypto/prf/prf.h"
 #include "tlsclient/src/error-internal.h"
 #include "tlsclient/src/handshake.h"
 #include "tlsclient/src/sink.h"
 
 namespace tlsclient {
+
+ConnectionPrivate::~ConnectionPrivate() {
+  delete server_cert;
+  memset(master_secret, 0, sizeof(master_secret));
+  delete handshake_hash;
+  delete read_cipher_spec;
+  delete write_cipher_spec;
+  delete pending_read_cipher_spec;
+  delete pending_write_cipher_spec;
+}
 
 Connection::Connection(Context* ctx)
     : priv_(new ConnectionPrivate(ctx)) {
@@ -65,13 +77,17 @@ Result Connection::Get(struct iovec* out) {
       return r;
     priv_->state = RECV_SERVER_HELLO;
   } else if (priv_->state == SEND_PHASE_TWO) {
-    Sink s(sink.Record(TLSv12, RECORD_HANDSHAKE));
+    Result r;
     {
+      Sink s(sink.Record(priv_->version, RECORD_HANDSHAKE));
       Sink ss(sink.HandshakeMessage(CLIENT_KEY_EXCHANGE));
-      assert(false);
-      /*const Result r = MarshallClientKeyExchange(&ss, priv_);
+      r = MarshallClientKeyExchange(&ss, priv_);
       if (r)
-        return r;*/
+        return r;
+    }
+    {
+      Sink s(sink.Record(priv_->version, RECORD_CHANGE_CIPHER_SPEC));
+      s.U8(1);
     }
     priv_->state = RECV_CHANGE_CIPHER_SPEC;
   } else {

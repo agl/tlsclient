@@ -16,6 +16,7 @@ namespace tlsclient {
 class Context;
 class Certificate;
 struct CipherSuite;
+class HandshakeHash;
 
 struct ConnectionPrivate {
   ConnectionPrivate(Context* in_ctx)
@@ -29,8 +30,15 @@ struct ConnectionPrivate {
         application_data_allowed(false),
         cipher_suite(NULL),
         server_supports_renegotiation_info(false),
-        server_cert(NULL) {
+        server_cert(NULL),
+        handshake_hash(NULL),
+        read_cipher_spec(NULL),
+        write_cipher_spec(NULL),
+        pending_read_cipher_spec(NULL),
+        pending_write_cipher_spec(NULL) {
   }
+
+  ~ConnectionPrivate();
 
   Arena arena;
   Context* const ctx;
@@ -62,6 +70,7 @@ struct ConnectionPrivate {
   // This is true iff we have completed a handshake and are happy to pass
   // application data records to the client.
   bool application_data_allowed;
+  uint8_t client_random[32];
   uint8_t server_random[32];
   const CipherSuite* cipher_suite;
   bool server_supports_renegotiation_info;
@@ -71,7 +80,13 @@ struct ConnectionPrivate {
   std::vector<struct iovec> server_certificates;
   // This is the server's certificate (i.e. the first one in it's certificate
   // chain)
-  Certificate *server_cert;
+  Certificate* server_cert;
+  uint8_t master_secret[48];
+  HandshakeHash* handshake_hash;
+  CipherSpec* read_cipher_spec;
+  CipherSpec* write_cipher_spec;
+  CipherSpec* pending_read_cipher_spec;
+  CipherSpec* pending_write_cipher_spec;
 };
 
 }  // namespace tlsclient
