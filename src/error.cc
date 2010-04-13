@@ -39,6 +39,7 @@ static const char kErrorStrings[][70] = {
   "Received fatal alert from peer: unknown_ca",
   "Received fatal alert from peer: access_denied",
   "Received fatal alert from peer: decode_error",
+  "Received fatal alert from peer: decrypt_error",
   "Received fatal alert from peer: export_restriction",
   "Received fatal alert from peer: protocol_version",
   "Received fatal alert from peer: insufficient_security",
@@ -60,6 +61,10 @@ static const char kErrorStrings[][70] = {
   "Certificate::SizeEncryptPKCS1 failed",
   "Certificate::EncryptPKCS1 failed",
   "An internal error occured (sorry, my fault!)",
+  "Received a record with bad authentication code",
+  "Received a Finished record with bad verify data",
+  "Connection::Encrypt called before the connection is ready",
+  "Connection::Encrypt called with > 2**14 bytes of data",
 
   // Remember to add an element to the enum in public/error.h!
 

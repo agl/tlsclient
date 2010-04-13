@@ -90,12 +90,6 @@ enum AlertType {
   ALERT_UNSUPPORTED_EXTENSION = 110,
 };
 
-enum {
-  CIPHERSUITE_RSA = 1 << 0,
-  CIPHERSUITE_RC4 = 1 << 1,
-  CIPHERSUITE_SHA = 1 << 2,
-};
-
 struct KeyBlock {
   enum {
     MAX_LEN = 32,
@@ -111,35 +105,14 @@ struct KeyBlock {
   uint8_t server_iv[MAX_LEN];
 };
 
-class CipherSpec {
- public:
-  virtual ~CipherSpec() { }
-};
-
-struct CipherSuite {
-  // A bitmask of CIPHERSUITE_ flags. When considering ciphersuites the
-  // Connection has a corresponding bitmask of enabled flags and only those
-  // ciphersuites which are a subset are selected.
-  unsigned flags;
-  // The wire value of this ciphersuite
-  uint16_t value;
-  // The name as given in the RFCs
-  char name[64];
-  // The sizes of the pieces of key material needed.
-  unsigned key_len, mac_len, iv_len;
-  // create is a factory function to create a new CipherSpec for this cipher
-  // suite and the given key material. The KeyBlock must already be filled out
-  // with the correct amount of key material.
-  CipherSpec* (*create) (const KeyBlock&);
-};
-
 class Sink;
 struct ConnectionPrivate;
 class Buffer;
 
 bool IsValidAlertLevel(uint8_t wire_level);
-Result MarshallClientHello(Sink* sink, ConnectionPrivate* priv);
-Result MarshallClientKeyExchange(Sink* sink, ConnectionPrivate* priv);
+Result MarshalClientHello(Sink* sink, ConnectionPrivate* priv);
+Result MarshalClientKeyExchange(Sink* sink, ConnectionPrivate* priv);
+Result MarshalFinished(Sink* sink, ConnectionPrivate* priv);
 Result GetHandshakeMessage(bool* found, HandshakeMessage* htype, std::vector<struct iovec>* out, Buffer* in);
 Result GetRecordOrHandshake(bool* found, RecordType* type, HandshakeMessage* htype, std::vector<struct iovec>* out, Buffer* in, ConnectionPrivate* priv);
 Result AlertTypeToResult(AlertType);
@@ -148,6 +121,7 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in);
 Result ProcessHandshakeMessage(ConnectionPrivate* priv, HandshakeMessage type, Buffer* in);
 Result ProcessServerCertificate(ConnectionPrivate* priv, Buffer* in);
 Result ProcessServerHelloDone(ConnectionPrivate* priv, Buffer* in);
+Result ProcessServerFinished(ConnectionPrivate* priv, Buffer* in);
 
 }  // namespace tlsclient
 

@@ -18,14 +18,14 @@ struct Extension {
  public:
   // Called to see if this extension should be included.
   virtual bool ShouldBeIncluded(ConnectionPrivate* priv) const = 0;
-  virtual Result Marshall(Sink* sink, ConnectionPrivate* priv) const = 0;
+  virtual Result Marshal(Sink* sink, ConnectionPrivate* priv) const = 0;
   virtual Result Process(Buffer* extension, ConnectionPrivate* priv) const = 0;
   // The IANA assigned extension number.
   virtual uint16_t value() const = 0;
 };
 
 Result ProcessServerHelloExtensions(Buffer* extension, ConnectionPrivate* priv);
-Result MarshallClientHelloExtensions(Sink* sink, ConnectionPrivate* priv);
+Result MarshalClientHelloExtensions(Sink* sink, ConnectionPrivate* priv);
 
 }  // namespace tlsclient
 

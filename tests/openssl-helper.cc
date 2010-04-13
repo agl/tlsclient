@@ -79,7 +79,15 @@ main(int argc, char **argv) {
       ERR_print_errors_fp(stderr);
       fprintf(stderr, "SSL_accept failed: %d\n", err);
       return 0;
+    } else {
+      break;
     }
+  }
+
+  char buffer[6];
+  SSL_read(server, buffer, sizeof(buffer));
+  if (memcmp(buffer, "hello!", sizeof(buffer)) == 0) {
+    SSL_write(server, "goodbye!", 8);
   }
 
   SSL_shutdown(server);

@@ -24,8 +24,7 @@ class Connection {
   Result Process(struct iovec** out, unsigned* out_n, size_t* used,
                  const struct iovec* iov, unsigned n);
 
-  Result Encrypt(uint8_t* data, size_t len);
-  Result Finish(struct iovec* start, struct iovec* end);
+  Result Encrypt(struct iovec* start, struct iovec* end, const struct iovec* iov, unsigned iov_len);
 
   bool is_server_cert_available() const;
   bool is_server_verified() const;

@@ -12,6 +12,8 @@
 #include <gtest/gtest.h>
 
 #include "tlsclient/public/context.h"
+#include "tlsclient/src/arena.h"
+#include "tlsclient/src/buffer.h"
 #include "tlsclient/tests/openssl-context.h"
 
 using namespace tlsclient;
@@ -92,9 +94,10 @@ writea(int fd, const void* idata, size_t len) {
   return true;
 }
 
-TEST_F(ConnectionTest, DISABLED_Basic) {
+TEST_F(ConnectionTest, Basic) {
   OpenSSLContext ctx;
   Connection conn(&ctx);
+  Result r;
 
   conn.EnableDefault();
   ASSERT_TRUE(conn.need_to_write());
@@ -102,7 +105,9 @@ TEST_F(ConnectionTest, DISABLED_Basic) {
   ASSERT_FALSE(conn.is_server_cert_available());
   ASSERT_FALSE(conn.is_ready_to_send_application_data());
 
+  Arena arena;
   std::vector<struct iovec> iovs;
+  bool sent = false;
 
   for (;;) {
     if (conn.need_to_write()) {
@@ -112,8 +117,19 @@ TEST_F(ConnectionTest, DISABLED_Basic) {
       ASSERT_TRUE(writea(client_, out.iov_base, out.iov_len));
     }
 
+    if (conn.is_ready_to_send_application_data() && !sent) {
+      struct iovec iov[3];
+      char kMsg[] = "hello!";
+      iov[1].iov_base = kMsg;
+      iov[1].iov_len = sizeof(kMsg) - 1;
+      r = conn.Encrypt(&iov[0], &iov[2], &iov[1], 1);
+      ASSERT_EQ(0, ErrorCodeFromResult(r));
+      writev(client_, iov, 3);
+      sent = true;
+    }
+
     static const size_t kBufferLength = 1;
-    uint8_t* buf = new uint8_t[kBufferLength];
+    uint8_t* buf = static_cast<uint8_t*>(arena.Allocate(kBufferLength));
     struct iovec iov, *out_iov;
     iov.iov_base = buf;
     unsigned out_n;
@@ -137,7 +153,7 @@ TEST_F(ConnectionTest, DISABLED_Basic) {
     iov.iov_len = n;
     iovs.push_back(iov);
 
-    Result r = conn.Process(&out_iov, &out_n, &used, &iovs[0], iovs.size());
+    r = conn.Process(&out_iov, &out_n, &used, &iovs[0], iovs.size());
     if (r) {
       char filename[8];
       FilenameFromResult(filename, r);
@@ -145,12 +161,20 @@ TEST_F(ConnectionTest, DISABLED_Basic) {
     }
     ASSERT_EQ(0, ErrorCodeFromResult(r));
 
+    if (out_n) {
+      char s[9];
+      Buffer buf(out_iov, out_n);
+      ASSERT_EQ(8u, buf.size());
+      ASSERT_TRUE(buf.Read(s, 8));
+      s[8] = 0;
+      ASSERT_STREQ("goodbye!", s);
+      break;
+    }
+
     // Need to remove the consumed bytes from the buffer.
     while (used) {
       assert(iovs.size() > 0);
       if (used >= iovs[0].iov_len) {
-        uint8_t* base = static_cast<uint8_t*>(iovs[0].iov_base) - (kBufferLength - iovs[0].iov_len);
-        delete[] base;
         used -= iovs[0].iov_len;
         iovs.erase(iovs.begin());
       } else {

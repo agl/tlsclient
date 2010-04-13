@@ -258,6 +258,28 @@ class Buffer {
     return Buffer(&iovs_copy[0], iovs.size(), true);
   }
 
+  const struct iovec* iovec() const {
+    return iov_;
+  }
+
+  unsigned iovec_len() const {
+    return len_;
+  }
+
+  static void RemoveTrailingBytes(struct iovec* iov, unsigned* iov_len, size_t bytes_to_remove) {
+    while (bytes_to_remove > 0 && *iov_len > 0) {
+      struct iovec* last = &iov[(*iov_len) - 1];
+      size_t n = last->iov_len;
+      if (n > bytes_to_remove) {
+        n = bytes_to_remove;
+        last->iov_len -= n;
+      } else {
+        (*iov_len)--;
+      }
+      bytes_to_remove -= n;
+    }
+  }
+
  private:
   Buffer()
       : iov_(NULL),

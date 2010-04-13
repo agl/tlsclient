@@ -8,6 +8,8 @@
 #include "tlsclient/src/crypto/prf/hmac.h"
 #include "tlsclient/src/crypto/sha1/sha1.h"
 
+#include <stdio.h>
+
 namespace tlsclient {
 
 // Calculates P_hash, as defined in RFC 2246, section 5.
@@ -129,31 +131,40 @@ class HandshakeHash10 : public HandshakeHash {
     md5_.Update(data, length);
   }
 
-  void Final(const uint8_t* master_secret, size_t master_secret_len) {
-    static const char kClientLabel[] = "client finished";
-    static const char kServerLabel[] = "server finished";
+  virtual const uint8_t* ClientVerifyData(unsigned* out_size, const uint8_t* master_secret, size_t master_secret_len) {
+    static const char kLabel[] = "client finished";
     uint8_t digests[MD5::DIGEST_SIZE + SHA1::DIGEST_SIZE];
+    MD5 md5(md5_);
+    SHA1 sha1(sha1_);
 
-    md5_.Final(digests);
-    sha1_.Final(digests + MD5::DIGEST_SIZE);
-    PRF10(client_verify, sizeof(client_verify), master_secret, master_secret_len, reinterpret_cast<const uint8_t*>(kClientLabel), sizeof(kClientLabel) - 1, digests, sizeof(digests));
-    PRF10(server_verify, sizeof(server_verify), master_secret, master_secret_len, reinterpret_cast<const uint8_t*>(kServerLabel), sizeof(kServerLabel) - 1, digests, sizeof(digests));
+    md5.Final(digests);
+    sha1.Final(digests + MD5::DIGEST_SIZE);
+    PRF10(client_verify_, sizeof(client_verify_), master_secret, master_secret_len, reinterpret_cast<const uint8_t*>(kLabel), sizeof(kLabel) - 1, digests, sizeof(digests));
+
+    *out_size = sizeof(client_verify_);
+    return client_verify_;
   }
 
-  const uint8_t* client_verify_data() const {
-    return client_verify;
-  }
+  virtual const uint8_t* ServerVerifyData(unsigned* out_size, const uint8_t* master_secret, size_t master_secret_len) {
+    static const char kLabel[] = "server finished";
+    uint8_t digests[MD5::DIGEST_SIZE + SHA1::DIGEST_SIZE];
+    MD5 md5(md5_);
+    SHA1 sha1(sha1_);
 
-  const uint8_t* server_verify_data() const {
-    return server_verify;
+    md5.Final(digests);
+    sha1.Final(digests + MD5::DIGEST_SIZE);
+    PRF10(server_verify_, sizeof(server_verify_), master_secret, master_secret_len, reinterpret_cast<const uint8_t*>(kLabel), sizeof(kLabel) - 1, digests, sizeof(digests));
+
+    *out_size = sizeof(server_verify_);
+    return server_verify_;
   }
 
  private:
   SHA1 sha1_;
   MD5 md5_;
 
-  uint8_t client_verify[12];
-  uint8_t server_verify[12];
+  uint8_t client_verify_[12];
+  uint8_t server_verify_[12];
 };
 
 HandshakeHash* HandshakeHashForVersion(TLSVersion version) {

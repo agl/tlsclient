@@ -23,7 +23,7 @@ class RenegotiationInfo : public Extension {
     return true;
   }
 
-  Result Marshall(Sink* sink, ConnectionPrivate* priv) const {
+  Result Marshal(Sink* sink, ConnectionPrivate* priv) const {
     // No support for renegotiation yet.
     sink->U8(0);
     return 0;
@@ -47,10 +47,10 @@ static Result MaybeIncludeExtension(const Extension* ext, Sink *sink, Connection
 
   sink->U16(ext->value());
   Sink s(sink->VariableLengthBlock(2));
-  return ext->Marshall(&s, priv);
+  return ext->Marshal(&s, priv);
 }
 
-Result MarshallClientHelloExtensions(Sink* sink, ConnectionPrivate* priv) {
+Result MarshalClientHelloExtensions(Sink* sink, ConnectionPrivate* priv) {
   Result r;
 
   for (size_t i = 0; i < arraysize(kExtensions); i++) {

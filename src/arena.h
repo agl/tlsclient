@@ -76,6 +76,12 @@ class Arena {
     return newptr + sizeof(Header);
   }
 
+  size_t LengthOfBlock(const void* inptr) {
+    const uint8_t* ptr = static_cast<const uint8_t*>(inptr);
+    const Header* elem = reinterpret_cast<const Header*>(ptr - sizeof(Header));
+    return elem->len;
+  }
+
   void Free(void* inptr) {
     uint8_t* ptr = static_cast<uint8_t*>(inptr);
     Header* elem = reinterpret_cast<Header*>(ptr - sizeof(Header));

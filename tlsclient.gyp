@@ -19,6 +19,7 @@
         'src/extension.cc',
         'src/handshake.cc',
         'src/record.cc',
+        'src/crypto/cipher_suites.cc',
         'src/crypto/md5/md5.cc',
         'src/crypto/prf/prf.cc',
         'src/crypto/rc4/rc4.cc',
@@ -66,7 +67,11 @@
       'sources': [
         'tests/openssl-helper.cc',
       ],
+      'cflags': [
+        '-I/home/agl/devel/openssl-0.9.8m/include',
+      ],
       'ldflags': [
+        '-L/home/agl/devel/openssl-0.9.8m',
         '-lcrypto',
         '-lssl',
       ],

@@ -15,20 +15,12 @@
 #include "tlsclient/src/error-internal.h"
 #include "tlsclient/src/extension.h"
 #include "tlsclient/src/sink.h"
+#include "tlsclient/src/crypto/cipher_suites.h"
 
 namespace tlsclient {
 
 // RFC 5746, section 3.3
 static const uint16_t kSignalingCipherSuiteValue = 0xff00;
-
-CipherSpec* CreateRC4SHA(const KeyBlock& kb) {
-  return NULL;
-}
-
-static const CipherSuite kCipherSuites[] = {
-  { CIPHERSUITE_RSA | CIPHERSUITE_RC4 | CIPHERSUITE_SHA,
-    0x0005, "TLS_RSA_WITH_RC4_128_SHA", 16, 20, 0, CreateRC4SHA},
-};
 
 bool IsValidHandshakeType(uint8_t type) {
   HandshakeMessage m(static_cast<HandshakeMessage>(type));
@@ -122,6 +114,8 @@ Result AlertTypeToResult(AlertType type) {
       return ERROR_RESULT(ERR_ALERT_ACCESS_DENIED);
     case ALERT_DECODE_ERROR:
       return ERROR_RESULT(ERR_ALERT_DECODE_ERROR);
+    case ALERT_DECRYPT_ERROR:
+      return ERROR_RESULT(ERR_ALERT_DECRYPT_ERROR);
     case ALERT_EXPORT_RESTRICTION:
       return ERROR_RESULT(ERR_ALERT_EXPORT_RESTRICTION);
     case ALERT_PROTOCOL_VERSION:
@@ -172,13 +166,13 @@ Result GetHandshakeMessage(bool* found, HandshakeMessage* htype, std::vector<str
 Result GetRecordOrHandshake(bool* found, RecordType* type, HandshakeMessage* htype, std::vector<struct iovec>* out, Buffer* in, ConnectionPrivate* priv) {
   uint8_t header[5];
   *found = false;
-  bool first_record = true;
   std::vector<struct iovec> handshake_vectors;
 
-  for (;;) {
+  for (unsigned n = 0; ; n++) {
+    const bool first_record = n == 0;
     uint16_t length;
 
-    if (priv->partial_record_remaining) {
+    if (priv->partial_record_remaining && first_record) {
       length = priv->partial_record_remaining;
       // We only ever half-process a record if it's a handshake record.
       *type = RECORD_HANDSHAKE;
@@ -203,23 +197,47 @@ Result GetRecordOrHandshake(bool* found, RecordType* type, HandshakeMessage* hty
       length = static_cast<uint16_t>(header[3]) << 8 | header[4];
       if (in->remaining() < length)
         return 0;
+
       if (*type != RECORD_HANDSHAKE) {
         if (!first_record)
           return ERROR_RESULT(ERR_TRUNCATED_HANDSHAKE_MESSAGE);
         // Records other than handshake records are processed one at a time and
         // we can store the vectors directly into |out|.
+        const size_t orig = out->size();
         in->PeekV(out, length);
+        if (priv->read_cipher_spec) {
+          unsigned iov_len = out->size() - orig;
+          unsigned bytes_stripped;
+          if (!priv->read_cipher_spec->Decrypt(&bytes_stripped, &(*out)[orig], &iov_len, header, priv->read_seq_num))
+            return ERROR_RESULT(ERR_BAD_MAC);
+          out->resize(orig + iov_len);
+          priv->read_seq_num++;
+        }
+
+        in->Advance(length);
         *found = true;
         return 0;
       }
-
-      // Decrypt and verify.
     }
 
     // Otherwise we append the vectors of the handshake message into
     // |handshake_vectors|
-    first_record = false;
+    const size_t orig = handshake_vectors.size();
     in->PeekV(&handshake_vectors, length);
+    // This is the number of bytes of padding and MAC removed from the end.
+    unsigned bytes_stripped = 0;
+    if (priv->read_cipher_spec) {
+      unsigned iov_len = handshake_vectors.size() - orig;
+      if (n < priv->pending_records_decrypted) {
+        bytes_stripped = priv->read_cipher_spec->StripMACAndPadding(&handshake_vectors[orig], &iov_len);
+      } else {
+        if (!priv->read_cipher_spec->Decrypt(&bytes_stripped, &handshake_vectors[orig], &iov_len, header, priv->read_seq_num))
+            return ERROR_RESULT(ERR_BAD_MAC);
+        priv->read_seq_num++;
+        priv->pending_records_decrypted++;
+      }
+      handshake_vectors.resize(orig + iov_len);
+    }
     Buffer buf(&handshake_vectors[0], handshake_vectors.size());
 
     const Result r = GetHandshakeMessage(found, htype, out, &buf);
@@ -233,8 +251,11 @@ Result GetRecordOrHandshake(bool* found, RecordType* type, HandshakeMessage* hty
       // If we did find a complete handshake message then it might not have
       // taken up the whole record. In this case, we advance the record, less
       // the amount of data left over in the handshake message buffer.
-      priv->partial_record_remaining = buf.remaining();
+      priv->partial_record_remaining = buf.remaining() + bytes_stripped;
       in->Advance(length - priv->partial_record_remaining);
+      // If we have a partial record remaining, then it has been decrypted.
+      // Otherwise, we can consumed all the decrypted records.
+      priv->pending_records_decrypted = priv->partial_record_remaining > 0;
       return 0;
     }
   }
@@ -247,7 +268,7 @@ uint16_t TLSVersionToOffer(ConnectionPrivate* priv) {
   return static_cast<uint16_t>(TLSv12);
 }
 
-Result MarshallClientHello(Sink* sink, ConnectionPrivate* priv) {
+Result MarshalClientHello(Sink* sink, ConnectionPrivate* priv) {
   const uint64_t now = priv->ctx->EpochSeconds();
   if (!now)
     return ERROR_RESULT(ERR_EPOCH_SECONDS_FAILED);
@@ -272,9 +293,10 @@ Result MarshallClientHello(Sink* sink, ConnectionPrivate* priv) {
       sink->U16(kSignalingCipherSuiteValue);
 
     unsigned written = 0;
-    for (unsigned i = 0; i < arraysize(kCipherSuites); i++) {
-      if ((kCipherSuites[i].flags & priv->cipher_suite_flags_enabled) == kCipherSuites[i].flags) {
-        s.U16(kCipherSuites[i].value);
+    const CipherSuite* suites = AllCipherSuites();
+    for (unsigned i = 0; suites[i].flags; i++) {
+      if ((suites[i].flags & priv->cipher_suite_flags_enabled) == suites[i].flags) {
+        s.U16(suites[i].value);
         written++;
       }
     }
@@ -291,7 +313,7 @@ Result MarshallClientHello(Sink* sink, ConnectionPrivate* priv) {
 
   {
     Sink s(sink->VariableLengthBlock(2));
-    const Result r = MarshallClientHelloExtensions(&s, priv);
+    const Result r = MarshalClientHelloExtensions(&s, priv);
     if (r)
       return r;
   }
@@ -299,7 +321,7 @@ Result MarshallClientHello(Sink* sink, ConnectionPrivate* priv) {
   return 0;
 }
 
-Result MarshallClientKeyExchange(Sink* sink, ConnectionPrivate* priv) {
+Result MarshalClientKeyExchange(Sink* sink, ConnectionPrivate* priv) {
   assert(priv->cipher_suite);
   assert(priv->cipher_suite->flags & CIPHERSUITE_RSA);
 
@@ -331,9 +353,21 @@ Result MarshallClientKeyExchange(Sink* sink, ConnectionPrivate* priv) {
     return ERROR_RESULT(ERR_INTERNAL_ERROR);
 
   memcpy(priv->master_secret, kb.master_secret, sizeof(priv->master_secret));
-  delete priv->pending_read_cipher_spec;
-  delete priv->pending_write_cipher_spec;
+  if (priv->pending_read_cipher_spec)
+    priv->pending_read_cipher_spec->DecRef();
+  if (priv->pending_write_cipher_spec)
+    priv->pending_write_cipher_spec->DecRef();
   priv->pending_read_cipher_spec = priv->pending_write_cipher_spec = priv->cipher_suite->create(kb);
+  priv->pending_write_cipher_spec->AddRef();
+
+  return 0;
+}
+
+Result MarshalFinished(Sink* sink, ConnectionPrivate* priv) {
+  unsigned verify_data_size;
+  const uint8_t* const verify_data = priv->handshake_hash->ClientVerifyData(&verify_data_size, priv->master_secret, sizeof(priv->master_secret));
+  uint8_t* b = sink->Block(verify_data_size);
+  memcpy(b, verify_data, verify_data_size);
 
   return 0;
 }
@@ -349,6 +383,19 @@ static const HandshakeMessage kPermittedHandshakeMessagesPerState[][2] = {
   /* RECV_FINISHED */ { FINISHED, INVALID_MESSAGE },
 };
 
+static void AddHandshakeMessageToVerifyHash(ConnectionPrivate* priv, HandshakeMessage type, Buffer* in) {
+  uint8_t header[4];
+  header[0] = static_cast<uint8_t>(type);
+  header[1] = in->size() >> 16;
+  header[2] = in->size() >> 8;
+  header[3] = in->size();
+  priv->handshake_hash->Update(header, sizeof(header));
+  for (unsigned i = 0; i < in->iovec_len(); i++) {
+    const struct iovec& iov = in->iovec()[i];
+    priv->handshake_hash->Update(iov.iov_base, iov.iov_len);
+  }
+}
+
 Result ProcessHandshakeMessage(ConnectionPrivate* priv, HandshakeMessage type, Buffer* in) {
   for (size_t i = 0; i < arraysize(kPermittedHandshakeMessagesPerState[0]); i++) {
     const HandshakeMessage permitted = kPermittedHandshakeMessagesPerState[priv->state][i];
@@ -358,6 +405,10 @@ Result ProcessHandshakeMessage(ConnectionPrivate* priv, HandshakeMessage type, B
       break;
   }
 
+  if (priv->handshake_hash &&
+      type != FINISHED && type != SERVER_HELLO && type != CHANGE_CIPHER_SPEC)
+    AddHandshakeMessageToVerifyHash(priv, type, in);
+
   switch (type) {
     case SERVER_HELLO:
       return ProcessServerHello(priv, in);
@@ -365,8 +416,20 @@ Result ProcessHandshakeMessage(ConnectionPrivate* priv, HandshakeMessage type, B
       return ProcessServerCertificate(priv, in);
     case SERVER_HELLO_DONE:
       return ProcessServerHelloDone(priv, in);
+    case CHANGE_CIPHER_SPEC:
+      uint8_t b;
+      if (!in->Read(&b, 1) || b != 1 || in->remaining() != 0)
+        return ERROR_RESULT(ERR_UNEXPECTED_HANDSHAKE_MESSAGE);
+      if (priv->read_cipher_spec)
+        priv->read_cipher_spec->DecRef();
+      priv->read_cipher_spec = priv->pending_read_cipher_spec;
+      priv->pending_read_cipher_spec = NULL;
+      priv->state = RECV_FINISHED;
+      return 0;
+    case FINISHED:
+      return ProcessServerFinished(priv, in);
     default:
-      assert(false);
+      return ERROR_RESULT(ERR_INTERNAL_ERROR);
   }
 }
 
@@ -378,7 +441,8 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
     return ERROR_RESULT(ERR_INVALID_HANDSHAKE_MESSAGE);
   if (!IsValidVersion(server_wire_version))
     return ERROR_RESULT(ERR_UNSUPPORTED_SERVER_VERSION);
-  if (priv->version_established && priv->version != static_cast<TLSVersion>(server_wire_version))
+  const TLSVersion version = static_cast<TLSVersion>(server_wire_version);
+  if (priv->version_established && priv->version != version)
     return ERROR_RESULT(ERR_INVALID_HANDSHAKE_MESSAGE);
 
   if (!in->Read(&priv->server_random, sizeof(priv->server_random)))
@@ -393,8 +457,9 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
   if (!in->U16(&cipher_suite))
     return ERROR_RESULT(ERR_INVALID_HANDSHAKE_MESSAGE);
 
-  for (size_t i = 0; i < arraysize(kCipherSuites); i++) {
-    const CipherSuite* suite = &kCipherSuites[i];
+  const CipherSuite* suites = AllCipherSuites();
+  for (size_t i = 0; suites[i].flags; i++) {
+    const CipherSuite* suite = &suites[i];
     if (suite->value == cipher_suite) {
       // Check that the ciphersuite was one that we offered.
       if ((suite->flags & priv->cipher_suite_flags_enabled) == suite->flags)
@@ -413,6 +478,22 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
   // We don't support compression yet.
   if (compression_method)
     return ERROR_RESULT(ERR_UNSUPPORTED_COMPRESSION_METHOD);
+
+  priv->handshake_hash = HandshakeHashForVersion(version);
+  if (!priv->handshake_hash)
+    return ERROR_RESULT(ERR_INTERNAL_ERROR);
+
+  // We didn't know, until now, which TLS version to use. That meant that we
+  // didn't know which hash to use for the ClientHello. However, the
+  // ClientHello is still hanging around in priv->last_buffer so we can add it,
+  // and this message, now.
+
+  if (priv->last_buffer) {
+    // The handshake hash doesn't include the record header, so we skip the first
+    // five bytes.
+    priv->handshake_hash->Update(priv->last_buffer + 5, priv->last_buffer_len - 5);
+  }
+  AddHandshakeMessageToVerifyHash(priv, SERVER_HELLO, in);
 
   if (in->remaining() == 0)
     return 0;
@@ -474,6 +555,27 @@ Result ProcessServerHelloDone(ConnectionPrivate* priv, Buffer* in) {
     return ERROR_RESULT(ERR_HANDSHAKE_TRAILING_DATA);
 
   priv->state = SEND_PHASE_TWO;
+
+  return 0;
+}
+
+Result ProcessServerFinished(ConnectionPrivate* priv, Buffer* in) {
+  unsigned server_verify_len;
+  const uint8_t* const server_verify = priv->handshake_hash->ServerVerifyData(&server_verify_len, priv->master_secret, sizeof(priv->master_secret));
+  uint8_t verify_data[32];
+
+  if (in->remaining() != server_verify_len)
+    return ERROR_RESULT(ERR_BAD_VERIFY);
+  if (server_verify_len > sizeof(verify_data))
+    return ERROR_RESULT(ERR_INTERNAL_ERROR);
+  if (!in->Read(verify_data, server_verify_len))
+    return ERROR_RESULT(ERR_INTERNAL_ERROR);
+
+  if (!CompareBytes(server_verify, verify_data, server_verify_len))
+    return ERROR_RESULT(ERR_BAD_VERIFY);
+
+  priv->state = AWAIT_HELLO_REQUEST;
+  priv->application_data_allowed = true;
 
   return 0;
 }

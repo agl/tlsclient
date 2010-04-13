@@ -16,6 +16,7 @@ namespace tlsclient {
 class Context;
 class Certificate;
 struct CipherSuite;
+class CipherSpec;
 class HandshakeHash;
 
 struct ConnectionPrivate {
@@ -27,6 +28,7 @@ struct ConnectionPrivate {
         last_buffer(NULL),
         version_established(false),
         partial_record_remaining(0),
+        pending_records_decrypted(0),
         application_data_allowed(false),
         cipher_suite(NULL),
         server_supports_renegotiation_info(false),
@@ -54,15 +56,20 @@ struct ConnectionPrivate {
   // finished with the last buffer and so we can free it. This buffer is
   // allocated via |arena|.
   uint8_t* last_buffer;
+  size_t last_buffer_len;
   // This is true if we have established a common TLS version in |version|
   bool version_established;
   TLSVersion version;
-  // This is the number of bytes of record payload data currently pending. This
-  // is non-zero if we parse a handshake message from a record, but there's
-  // another handshake message in the same record. In this case, next time
-  // GetRecordOrHandshake looks at the pending data it needs to know not to
-  // expect a record header at the beginning.
+  // This is the number of bytes of record payload data currently pending.
+  // This is non-zero if we parse a handshake message from a record, but
+  // there's another handshake message in the same record. In this case, next
+  // time GetRecordOrHandshake looks at the pending data it needs to know not
+  // to expect a record header at the beginning.
   unsigned partial_record_remaining;
+  // This is the number of records which we have decrypted but not processed.
+  // This is non-zero if we're looking for a complete handshake message and
+  // it spans several encrypted records.
+  unsigned pending_records_decrypted;
   // When returning vectors of application data, we need somewhere to store the
   // iovecs. We want to avoid allocating and freeing then everytime so we keep
   // this around. It will grow as needed but (hopefully) not shrink.
@@ -83,10 +90,21 @@ struct ConnectionPrivate {
   Certificate* server_cert;
   uint8_t master_secret[48];
   HandshakeHash* handshake_hash;
+  // A NULL pointer for either of these means the NULL cipher spec.
   CipherSpec* read_cipher_spec;
   CipherSpec* write_cipher_spec;
+  // These are the cipher specs which are waiting for a ChangeCipherSpec in
+  // order to become current.
   CipherSpec* pending_read_cipher_spec;
   CipherSpec* pending_write_cipher_spec;
+  // The sequence numbers. See RFC 2246 section 6.
+  uint64_t write_seq_num;
+  uint64_t read_seq_num;
+  // This is buffer space in which we stuff record headers, MACs and padding
+  // bytes for outbound records. We want to encrypt them in place, but we need
+  // to add some bytes at the beginning and end. So we return an array of
+  // iovecs and the extra space comes from here:
+  uint8_t scratch[64];
 };
 
 }  // namespace tlsclient

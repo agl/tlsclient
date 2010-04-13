@@ -24,6 +24,7 @@ class Sink {
   Sink(Arena* a)
       : arena_(a),
         buf_(&b_),
+        initial_offset_(0),
         length_size_(0),
         length_offset_(0) {
     b_.data = static_cast<uint8_t*>(a->Allocate(kDefaultSize));
@@ -32,15 +33,19 @@ class Sink {
   }
 
   ~Sink() {
-    const size_t written = buf_->offset - length_offset_ - length_size_;
-
-    for (unsigned i = 0; i < length_size_; i++) {
-      buf_->data[length_offset_ + i] = written >> (8 * (length_size_ - i - 1));
-    }
+    WriteLength();
 
     if (buf_ == &b_ && b_.data) {
       arena_->Free(b_.data);
       b_.data = NULL;
+    }
+  }
+
+  void WriteLength() {
+    const size_t written = buf_->offset - length_offset_ - length_size_;
+
+    for (unsigned i = 0; i < length_size_; i++) {
+      buf_->data[length_offset_ + i] = written >> (8 * (length_size_ - i - 1));
     }
   }
 
@@ -55,6 +60,7 @@ class Sink {
   Sink(const Sink& other) :
     arena_(other.arena_),
     buf_(other.buf_),
+    initial_offset_(other.initial_offset_),
     length_size_(0),
     length_offset_(0) {
   }
@@ -134,17 +140,18 @@ class Sink {
   }
 
   const uint8_t* data() const {
-    return buf_->data;
+    return buf_->data + initial_offset_;
   }
 
   size_t size() const {
-    return buf_->offset;
+    return buf_->offset - initial_offset_;
   }
 
  private:
   Sink(Sink* parent, unsigned length_size)
       : arena_(parent->arena_),
         buf_(parent->buf_),
+        initial_offset_(buf_->offset),
         length_size_(length_size),
         length_offset_(parent->buf_->offset - length_size) {
   }
@@ -160,6 +167,7 @@ class Sink {
 
   Arena *const arena_;
   Buf *const buf_;
+  const size_t initial_offset_;
 
   const unsigned length_size_;
   const size_t length_offset_;
