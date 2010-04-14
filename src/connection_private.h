@@ -38,7 +38,9 @@ struct ConnectionPrivate {
         write_cipher_spec(NULL),
         pending_read_cipher_spec(NULL),
         pending_write_cipher_spec(NULL),
-        session_id_len(0) {
+        session_id_len(0),
+        did_resume(false),
+        resumption_data_ready(false) {
   }
 
   ~ConnectionPrivate();
@@ -111,6 +113,13 @@ struct ConnectionPrivate {
   // session id.
   uint8_t session_id[32];
   uint8_t session_id_len;
+  // This is set to true when a ServerHello is received which echos our
+  // attempted session resumption.
+  bool did_resume;
+  // This is set to true when |session_id_len| and |master_secret| are ready.
+  // (Note that session_id_len may still be zero if the server didn't offer
+  // resumption.)
+  bool resumption_data_ready;
 };
 
 }  // namespace tlsclient

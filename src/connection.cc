@@ -299,6 +299,11 @@ Result Connection::Process(struct iovec** out, unsigned* out_n, size_t* used,
 
 static const uint8_t kResumptionSerialisationVersion = 0;
 
+bool Connection::is_resumption_data_availible() const {
+  return priv_->resumption_data_ready &&
+         priv_->session_id_len;
+}
+
 Result Connection::GetResumptionData(struct iovec* iov) {
   Sink sink(&priv_->arena);
 
@@ -315,6 +320,9 @@ Result Connection::GetResumptionData(struct iovec* iov) {
   uint8_t* session_id = sink.Block(sizeof(priv_->session_id));
   memcpy(session_id, priv_->session_id, sizeof(priv_->session_id));
 
+  iov->iov_base = sink.Release();
+  iov->iov_len = sink.size();
+
   return 0;
 }
 
@@ -326,9 +334,12 @@ Result Connection::SetResumptionData(const uint8_t* data, size_t len) {
   if (!buf.Read(&version, 1) || version != kResumptionSerialisationVersion)
     return ERROR_RESULT(ERR_CANNOT_PARSE_RESUMPTION_DATA);
 
+  uint8_t cipher_suite_value_bytes[2];
   uint16_t cipher_suite_value;
-  if (!buf.Read(&cipher_suite_value, 2))
+  if (!buf.Read(&cipher_suite_value_bytes, 2))
     return ERROR_RESULT(ERR_CANNOT_PARSE_RESUMPTION_DATA);
+  cipher_suite_value = static_cast<uint16_t>(cipher_suite_value_bytes[0]) << 8 |
+                       cipher_suite_value_bytes[1];
 
   const CipherSuite* suites = AllCipherSuites();
   const CipherSuite* cipher_suite = NULL;
@@ -358,6 +369,10 @@ Result Connection::SetResumptionData(const uint8_t* data, size_t len) {
   }
 
   return 0;
+}
+
+bool Connection::did_resume() const {
+  return priv_->did_resume;
 }
 
 }  // namespace tlsclient

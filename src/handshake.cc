@@ -368,6 +368,8 @@ Result MarshalClientKeyExchange(Sink* sink, ConnectionPrivate* priv) {
   if (!MasterSecretFromPreMasterSecret(priv->master_secret, priv->version, premaster_secret, sizeof(premaster_secret), priv->client_random, priv->server_random))
     return ERROR_RESULT(ERR_INTERNAL_ERROR);
 
+  priv->resumption_data_ready = true;
+
   return SetupCiperSpec(priv);
 }
 
@@ -435,6 +437,7 @@ Result ProcessHandshakeMessage(ConnectionPrivate* priv, HandshakeMessage type, B
         priv->read_cipher_spec->DecRef();
       priv->read_cipher_spec = priv->pending_read_cipher_spec;
       priv->pending_read_cipher_spec = NULL;
+      priv->read_seq_num = 0;
       if (priv->state == RECV_CHANGE_CIPHER_SPEC) {
         priv->state = RECV_FINISHED;
       } else {
@@ -463,7 +466,6 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
   if (!in->Read(&priv->server_random, sizeof(priv->server_random)))
     return ERROR_RESULT(ERR_INVALID_HANDSHAKE_MESSAGE);
 
-  // No session id support yet.
   Buffer session_id_buf(in->VariableLength(&ok, 1));
   if (!ok)
     return ERROR_RESULT(ERR_INVALID_HANDSHAKE_MESSAGE);
@@ -477,6 +479,10 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
       memcmp(session_id, priv->session_id, priv->session_id_len) == 0) {
     // Session ids match. We're resuming a session.
     resumption = true;
+  } else {
+    priv->session_id_len = session_id_buf.remaining();
+    if (!session_id_buf.Read(priv->session_id, priv->session_id_len))
+      return ERROR_RESULT(ERR_INTERNAL_ERROR);
   }
 
   uint16_t cipher_suite;
@@ -533,6 +539,8 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
     if (r)
       return r;
     priv->state = RECV_RESUME_CHANGE_CIPHER_SPEC;
+    priv->did_resume = true;
+    priv->resumption_data_ready = true;
   } else {
     priv->state = RECV_SERVER_CERTIFICATE;
   }

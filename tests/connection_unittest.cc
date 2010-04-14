@@ -69,11 +69,17 @@ class ConnectionTest : public ::testing::Test {
     client_ = client;
   }
 
-  virtual void TearDown() {
+  void StopServer() {
     close(client_);
     client_ = -1;
     int status;
-    waitpid(client_, &status, 0);
+    waitpid(child_, &status, 0);
+    child_ = -1;
+  }
+
+  virtual void TearDown() {
+    if (child_ != -1)
+      StopServer();
   }
 
   int client_;
@@ -166,6 +172,8 @@ static void PerformConnection(const int fd, Connection* conn) {
     iovs.push_back(iov);
 
     r = conn->Process(&out_iov, &out_n, &used, &iovs[0], iovs.size());
+    if (ErrorCodeFromResult(r) == ERR_ALERT_CLOSE_NOTIFY)
+      break;
     MaybePrintResult(r);
     ASSERT_EQ(0, ErrorCodeFromResult(r));
 
@@ -176,7 +184,6 @@ static void PerformConnection(const int fd, Connection* conn) {
       ASSERT_TRUE(buf.Read(s, 8));
       s[8] = 0;
       ASSERT_STREQ("goodbye!", s);
-      break;
     }
 
     // Need to remove the consumed bytes from the buffer.
@@ -214,6 +221,16 @@ TEST_F(ConnectionTest, GnuTLSSimple) {
   PerformConnection(client_, &conn);
 }
 
+TEST_F(ConnectionTest, GnuTLSv12) {
+  static const char* const args[] = {kGnuTLSHelper, "tls1.2", NULL};
+
+  OpenSSLContext ctx;
+  Connection conn(&ctx);
+  conn.EnableDefault();
+  StartServer(args);
+  PerformConnection(client_, &conn);
+}
+
 TEST_F(ConnectionTest, OpenSSLSNI) {
   static const char* const args[] = {kOpenSSLHelper, "sni", NULL};
 
@@ -225,5 +242,29 @@ TEST_F(ConnectionTest, OpenSSLSNI) {
   PerformConnection(client_, &conn);
 }
 
+TEST_F(ConnectionTest, GnuTLSResume) {
+  static const char* const args[] = {kGnuTLSHelper, "resume", NULL};
+  Result r;
+
+  OpenSSLContext ctx;
+  Connection conn(&ctx);
+  conn.EnableDefault();
+  StartServer(args);
+  PerformConnection(client_, &conn);
+  ASSERT_FALSE(conn.did_resume());
+  ASSERT_TRUE(conn.is_resumption_data_availible());
+
+  struct iovec resumption_data;
+  r = conn.GetResumptionData(&resumption_data);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+
+  Connection conn2(&ctx);
+  conn2.EnableDefault();
+  r = conn2.SetResumptionData(static_cast<uint8_t*>(resumption_data.iov_base), resumption_data.iov_len);
+  MaybePrintResult(r);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+  PerformConnection(client_, &conn2);
+  ASSERT_TRUE(conn.did_resume());
+}
 
 }  // anonymous namespace

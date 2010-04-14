@@ -101,9 +101,8 @@ class Connection {
   Result Encrypt(struct iovec* start, struct iovec* end, const struct iovec* iov, unsigned iov_len);
 
   // is_resumption_data_availible returns true if |GetResumptionData| can
-  // return session resumption information for this connection. Resumption data
-  // is never availible for resumed sessions.
-  bool is_resumption_data_availible();
+  // return session resumption information for this connection.
+  bool is_resumption_data_availible() const;
   // GetResumptionData returns an opaque block of data which can be give as an
   // argument to |SetResumptionData| on future connections. The returned data
   // is freshly allocated and will be released when the Connection object is
@@ -123,6 +122,8 @@ class Connection {
   //     ERR_RESUME_CIPHER_SUITE_NOT_ENABLED: the data specified a cipher suite
   //       which hasn't been enabled via calls to Connection::Enable*
   Result SetResumptionData(const uint8_t* data, size_t len);
+  // did_resume returns true if the last handshake was a resumption.
+  bool did_resume() const;
 
   // is_server_cert_available returns true iff calling |server_certificates|
   // will return the peer's certificates. This will never be true if the
