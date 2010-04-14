@@ -35,10 +35,44 @@ class RenegotiationInfo : public Extension {
   }
 };
 
+// ServerNameIndication implements RFC 3546, section 3.1.
+class ServerNameIndication : public Extension {
+ public:
+  enum {
+    SNI_NAME_TYPE_HOST_NAME = 0,
+    MAX_HOST_NAME = 65535,
+  };
+
+  uint16_t value() const {
+    return 0;
+  }
+
+  bool ShouldBeIncluded(ConnectionPrivate* priv) const {
+    const size_t size = priv->host_name.size();
+    return size > 0 && size <= MAX_HOST_NAME;
+  }
+
+  Result Marshal(Sink* sink, ConnectionPrivate* priv) const {
+    Sink server_name_list(sink->VariableLengthBlock(2));
+    server_name_list.U8(SNI_NAME_TYPE_HOST_NAME);
+    Sink host_name(server_name_list.VariableLengthBlock(2));
+    uint8_t* name = host_name.Block(priv->host_name.size());
+    memcpy(name, priv->host_name.data(), priv->host_name.size());
+    return 0;
+  }
+
+  Result Process(Buffer* extension, ConnectionPrivate* priv) const {
+    // The server is free to echo an empty extension back to us.
+    return 0;
+  }
+};
+
 RenegotiationInfo g_renegotiation_info;
+ServerNameIndication g_sni;
 
 static const Extension* kExtensions[] = {
   &g_renegotiation_info,
+  &g_sni,
 };
 
 static Result MaybeIncludeExtension(const Extension* ext, Sink *sink, ConnectionPrivate* priv) {

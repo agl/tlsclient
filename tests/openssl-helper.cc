@@ -4,7 +4,6 @@
 
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <sys/un.h>
 
 #include "openssl/bio.h"
 #include "openssl/ssl.h"
@@ -13,6 +12,14 @@
 static const char kKeyFile[] = "testdata/openssl.key";
 static const char kCertFile[] = "testdata/openssl.crt";
 
+static int sni_cb(SSL *s, int *ad, void *arg) {
+  const char* servername = SSL_get_servername(s, TLSEXT_NAMETYPE_host_name);
+  if (servername && strcmp(servername, "test.example.com") == 0)
+    *reinterpret_cast<bool*>(arg) = true;
+
+  return SSL_TLSEXT_ERR_OK;
+}
+
 int
 main(int argc, char **argv) {
   SSL_library_init();
@@ -20,8 +27,23 @@ main(int argc, char **argv) {
   OpenSSL_add_all_algorithms();
   SSL_load_error_strings();
 
+  bool sni = false, sni_good = false;
+  for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "sni") == 0) {
+      sni = true;
+    } else {
+      fprintf(stderr, "Unknown argument: %s\n", argv[i]);
+      return 1;
+    }
+  }
+
   BIO* bio = BIO_new_socket(3, 0 /* don't take ownership of fd */);
   SSL_CTX* ctx = SSL_CTX_new(TLSv1_server_method());
+
+  if (sni) {
+    SSL_CTX_set_tlsext_servername_callback(ctx, sni_cb);
+    SSL_CTX_set_tlsext_servername_arg(ctx, &sni_good);
+  }
 
   BIO* key = BIO_new(BIO_s_file());
   if (BIO_read_filename(key, kKeyFile) <= 0) {
@@ -49,7 +71,6 @@ main(int argc, char **argv) {
     return 1;
   }
   BIO_free(cert);
-
 
   if (SSL_CTX_use_certificate(ctx, pcert) <= 0) {
     fprintf(stderr, "Failed to load %s\n", kCertFile);
@@ -82,6 +103,11 @@ main(int argc, char **argv) {
     } else {
       break;
     }
+  }
+
+  if (sni && !sni_good) {
+    fprintf(stderr, "SNI failed\n");
+    return 1;
   }
 
   char buffer[6];

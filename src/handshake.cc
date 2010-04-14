@@ -283,7 +283,9 @@ Result MarshalClientHello(Sink* sink, ConnectionPrivate* priv) {
   sink->U16(TLSVersionToOffer(priv));
   sink->Append(priv->client_random, sizeof(priv->client_random));
 
-  sink->U8(0);  // no session resumption for the moment.
+  sink->U8(priv->session_id_len);
+  uint8_t* session_id = sink->Block(priv->session_id_len);
+  memcpy(session_id, priv->session_id, priv->session_id_len);
 
   {
     Sink s(sink->VariableLengthBlock(2));
@@ -321,9 +323,28 @@ Result MarshalClientHello(Sink* sink, ConnectionPrivate* priv) {
   return 0;
 }
 
+static Result SetupCiperSpec(ConnectionPrivate* priv) {
+  KeyBlock kb;
+  kb.key_len = priv->cipher_suite->key_len;
+  kb.mac_len = priv->cipher_suite->mac_len;
+  kb.iv_len = priv->cipher_suite->iv_len;
+
+  if (!KeysFromMasterSecret(&kb, priv->version, priv->master_secret, priv->client_random, priv->server_random))
+    return ERROR_RESULT(ERR_INTERNAL_ERROR);
+
+  if (priv->pending_read_cipher_spec)
+    priv->pending_read_cipher_spec->DecRef();
+  if (priv->pending_write_cipher_spec)
+    priv->pending_write_cipher_spec->DecRef();
+  priv->pending_read_cipher_spec = priv->pending_write_cipher_spec = priv->cipher_suite->create(kb);
+  priv->pending_write_cipher_spec->AddRef();
+
+  return 0;
+}
+
 Result MarshalClientKeyExchange(Sink* sink, ConnectionPrivate* priv) {
-  assert(priv->cipher_suite);
-  assert(priv->cipher_suite->flags & CIPHERSUITE_RSA);
+  if (!priv->cipher_suite || (priv->cipher_suite->flags & CIPHERSUITE_RSA) == 0)
+    return ERROR_RESULT(ERR_INTERNAL_ERROR);
 
   uint8_t premaster_secret[48];
   const uint16_t offered_version = TLSVersionToOffer(priv);
@@ -344,23 +365,10 @@ Result MarshalClientKeyExchange(Sink* sink, ConnectionPrivate* priv) {
   if (!priv->server_cert->EncryptPKCS1(encrypted_premaster_secret, premaster_secret, sizeof(premaster_secret)))
     return ERROR_RESULT(ERR_ENCRYPT_PKCS1_FAILED);
 
-  KeyBlock kb;
-  kb.key_len = priv->cipher_suite->key_len;
-  kb.mac_len = priv->cipher_suite->mac_len;
-  kb.iv_len = priv->cipher_suite->iv_len;
-
-  if (!KeysFromPreMasterSecret(priv->version, &kb, premaster_secret, sizeof(premaster_secret), priv->client_random, priv->server_random))
+  if (!MasterSecretFromPreMasterSecret(priv->master_secret, priv->version, premaster_secret, sizeof(premaster_secret), priv->client_random, priv->server_random))
     return ERROR_RESULT(ERR_INTERNAL_ERROR);
 
-  memcpy(priv->master_secret, kb.master_secret, sizeof(priv->master_secret));
-  if (priv->pending_read_cipher_spec)
-    priv->pending_read_cipher_spec->DecRef();
-  if (priv->pending_write_cipher_spec)
-    priv->pending_write_cipher_spec->DecRef();
-  priv->pending_read_cipher_spec = priv->pending_write_cipher_spec = priv->cipher_suite->create(kb);
-  priv->pending_write_cipher_spec->AddRef();
-
-  return 0;
+  return SetupCiperSpec(priv);
 }
 
 Result MarshalFinished(Sink* sink, ConnectionPrivate* priv) {
@@ -381,6 +389,9 @@ static const HandshakeMessage kPermittedHandshakeMessagesPerState[][2] = {
   /* SEND_PHASE_TWO */ { INVALID_MESSAGE },
   /* RECV_CHANGE_CIPHER_SPEC */ { CHANGE_CIPHER_SPEC, INVALID_MESSAGE },
   /* RECV_FINISHED */ { FINISHED, INVALID_MESSAGE },
+  /* RECV_RESUME_CHANGE_CIPHER_SPEC */ { CHANGE_CIPHER_SPEC, INVALID_MESSAGE },
+  /* RECV_RESUME_FINISHED */ { FINISHED, INVALID_MESSAGE },
+  /* SEND_RESUME_PHASE_ONE */ { INVALID_MESSAGE },
 };
 
 static void AddHandshakeMessageToVerifyHash(ConnectionPrivate* priv, HandshakeMessage type, Buffer* in) {
@@ -424,7 +435,11 @@ Result ProcessHandshakeMessage(ConnectionPrivate* priv, HandshakeMessage type, B
         priv->read_cipher_spec->DecRef();
       priv->read_cipher_spec = priv->pending_read_cipher_spec;
       priv->pending_read_cipher_spec = NULL;
-      priv->state = RECV_FINISHED;
+      if (priv->state == RECV_CHANGE_CIPHER_SPEC) {
+        priv->state = RECV_FINISHED;
+      } else {
+        priv->state = RECV_RESUME_FINISHED;
+      }
       return 0;
     case FINISHED:
       return ProcessServerFinished(priv, in);
@@ -449,22 +464,40 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
     return ERROR_RESULT(ERR_INVALID_HANDSHAKE_MESSAGE);
 
   // No session id support yet.
-  Buffer session_id(in->VariableLength(&ok, 1));
+  Buffer session_id_buf(in->VariableLength(&ok, 1));
   if (!ok)
     return ERROR_RESULT(ERR_INVALID_HANDSHAKE_MESSAGE);
+  if (session_id_buf.remaining() > sizeof(priv->session_id))
+    return ERROR_RESULT(ERR_INVALID_HANDSHAKE_MESSAGE);
+  uint8_t session_id[sizeof(priv->session_id)];
+  bool resumption = false;
+  if (priv->session_id_len &&
+      session_id_buf.remaining() == priv->session_id_len &&
+      session_id_buf.Read(session_id, priv->session_id_len) &&
+      memcmp(session_id, priv->session_id, priv->session_id_len) == 0) {
+    // Session ids match. We're resuming a session.
+    resumption = true;
+  }
 
   uint16_t cipher_suite;
   if (!in->U16(&cipher_suite))
     return ERROR_RESULT(ERR_INVALID_HANDSHAKE_MESSAGE);
 
-  const CipherSuite* suites = AllCipherSuites();
-  for (size_t i = 0; suites[i].flags; i++) {
-    const CipherSuite* suite = &suites[i];
-    if (suite->value == cipher_suite) {
-      // Check that the ciphersuite was one that we offered.
-      if ((suite->flags & priv->cipher_suite_flags_enabled) == suite->flags)
-        priv->cipher_suite = suite;
-      break;
+  if (resumption) {
+    // Check that the cipher suite is the same one as from the previous
+    // session.
+    if (cipher_suite != priv->cipher_suite->value)
+      return ERROR_RESULT(ERR_RESUMPTION_CIPHER_SUITE_MISMATCH);
+  } else {
+    const CipherSuite* suites = AllCipherSuites();
+    for (size_t i = 0; suites[i].flags; i++) {
+      const CipherSuite* suite = &suites[i];
+      if (suite->value == cipher_suite) {
+        // Check that the ciphersuite was one that we offered.
+        if ((suite->flags & priv->cipher_suite_flags_enabled) == suite->flags)
+          priv->cipher_suite = suite;
+        break;
+      }
     }
   }
 
@@ -495,6 +528,15 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
   }
   AddHandshakeMessageToVerifyHash(priv, SERVER_HELLO, in);
 
+  if (resumption) {
+    Result r = SetupCiperSpec(priv);
+    if (r)
+      return r;
+    priv->state = RECV_RESUME_CHANGE_CIPHER_SPEC;
+  } else {
+    priv->state = RECV_SERVER_CERTIFICATE;
+  }
+
   if (in->remaining() == 0)
     return 0;
 
@@ -508,8 +550,6 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
 
   if (in->remaining())
     return ERROR_RESULT(ERR_HANDSHAKE_TRAILING_DATA);
-
-  priv->state = RECV_SERVER_CERTIFICATE;
 
   return 0;
 }
@@ -530,7 +570,7 @@ Result ProcessServerCertificate(ConnectionPrivate* priv, Buffer* in) {
       return ERROR_RESULT(ERR_INVALID_HANDSHAKE_MESSAGE);
     void* certbytes = priv->arena.Allocate(size);
     if (!certificate.Read(certbytes, size))
-      assert(false);
+      return ERROR_RESULT(ERR_INTERNAL_ERROR);
     struct iovec iov = {certbytes, size};
     priv->server_certificates.push_back(iov);
   }
@@ -574,8 +614,13 @@ Result ProcessServerFinished(ConnectionPrivate* priv, Buffer* in) {
   if (!CompareBytes(server_verify, verify_data, server_verify_len))
     return ERROR_RESULT(ERR_BAD_VERIFY);
 
-  priv->state = AWAIT_HELLO_REQUEST;
   priv->application_data_allowed = true;
+
+  if (priv->state == RECV_FINISHED) {
+    priv->state = AWAIT_HELLO_REQUEST;
+  } else {
+    priv->state = SEND_RESUME_PHASE_ONE;
+  }
 
   return 0;
 }

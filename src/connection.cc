@@ -91,7 +91,8 @@ Result Connection::Get(struct iovec* out) {
 
   Sink sink(&priv_->arena);
 
-  assert(need_to_write());
+  if (!need_to_write())
+    return ERROR_RESULT(ERR_UNNEEDED_GET);
 
   if (priv_->state == SEND_PHASE_ONE) {
     Sink s(sink.Record(TLSv12, RECORD_HANDSHAKE));
@@ -106,9 +107,10 @@ Result Connection::Get(struct iovec* out) {
     if ((r = EncryptRecord(priv_, &s)))
       return r;
     priv_->state = RECV_SERVER_HELLO;
-  } else if (priv_->state == SEND_PHASE_TWO) {
+  } else if (priv_->state == SEND_PHASE_TWO ||
+             priv_->state == SEND_RESUME_PHASE_ONE) {
     Result r;
-    {
+    if (priv_->state == SEND_PHASE_TWO) {
       Sink s(sink.Record(priv_->version, RECORD_HANDSHAKE));
       {
         Sink ss(sink.HandshakeMessage(CLIENT_KEY_EXCHANGE));
@@ -141,9 +143,14 @@ Result Connection::Get(struct iovec* out) {
       if ((r = EncryptRecord(priv_, &s)))
         return r;
     }
-    priv_->state = RECV_CHANGE_CIPHER_SPEC;
+
+    if (priv_->state == SEND_PHASE_TWO) {
+      priv_->state = RECV_CHANGE_CIPHER_SPEC;
+    } else {
+      priv_->state = AWAIT_HELLO_REQUEST;
+    }
   } else {
-    assert(false);
+    return ERROR_RESULT(ERR_INTERNAL_ERROR);
   }
 
   priv_->last_buffer = sink.Release();
@@ -285,9 +292,72 @@ Result Connection::Process(struct iovec** out, unsigned* out_n, size_t* used,
         *used = buf.TellBytes();
         break;
       default:
-        assert(false);
+        return ERROR_RESULT(ERR_INTERNAL_ERROR);
     }
   }
+}
+
+static const uint8_t kResumptionSerialisationVersion = 0;
+
+Result Connection::GetResumptionData(struct iovec* iov) {
+  Sink sink(&priv_->arena);
+
+  if (priv_->state != AWAIT_HELLO_REQUEST ||
+      priv_->session_id_len == 0) {
+    return ERROR_RESULT(ERR_RESUMPTION_DATA_NOT_READY);
+  }
+
+  sink.U8(kResumptionSerialisationVersion);
+  sink.U16(priv_->cipher_suite->value);
+  uint8_t* master = sink.Block(sizeof(priv_->master_secret));
+  memcpy(master, priv_->master_secret, sizeof(priv_->master_secret));
+  sink.U8(priv_->session_id_len);
+  uint8_t* session_id = sink.Block(sizeof(priv_->session_id));
+  memcpy(session_id, priv_->session_id, sizeof(priv_->session_id));
+
+  return 0;
+}
+
+Result Connection::SetResumptionData(const uint8_t* data, size_t len) {
+  const struct iovec iov = {const_cast<uint8_t*>(data), len};
+  Buffer buf(&iov, 1);
+
+  uint8_t version;
+  if (!buf.Read(&version, 1) || version != kResumptionSerialisationVersion)
+    return ERROR_RESULT(ERR_CANNOT_PARSE_RESUMPTION_DATA);
+
+  uint16_t cipher_suite_value;
+  if (!buf.Read(&cipher_suite_value, 2))
+    return ERROR_RESULT(ERR_CANNOT_PARSE_RESUMPTION_DATA);
+
+  const CipherSuite* suites = AllCipherSuites();
+  const CipherSuite* cipher_suite = NULL;
+  for (unsigned i = 0; suites[i].flags; i++) {
+    if (suites[i].value == cipher_suite_value) {
+      if ((suites[i].flags & priv_->cipher_suite_flags_enabled) == suites[i].flags) {
+        cipher_suite = &suites[i];
+        break;
+      } else {
+        return ERROR_RESULT(ERR_RESUME_CIPHER_SUITE_NOT_ENABLED);
+      }
+    }
+  }
+
+  if (!cipher_suite)
+    return ERROR_RESULT(ERR_RESUME_CIPHER_SUITE_NOT_FOUND);
+
+  priv_->cipher_suite = cipher_suite;
+
+  if (!buf.Read(priv_->master_secret, sizeof(priv_->master_secret)) ||
+      !buf.Read(&priv_->session_id_len, sizeof(priv_->session_id_len)) ||
+      priv_->session_id_len == 0 ||
+      priv_->session_id_len > 32 ||
+      !buf.Read(priv_->session_id, sizeof(priv_->session_id))) {
+    priv_->session_id_len = 0;
+    return ERROR_RESULT(ERR_CANNOT_PARSE_RESUMPTION_DATA);
+  }
+
+  return 0;
 }
 
 }  // namespace tlsclient

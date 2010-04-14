@@ -65,6 +65,12 @@ static const char kErrorStrings[][70] = {
   "Received a Finished record with bad verify data",
   "Connection::Encrypt called before the connection is ready",
   "Connection::Encrypt called with > 2**14 bytes of data",
+  "Connection::Get called without need_to_write() being true",
+  "GetResumptionData called before session is ready",
+  "Connection::SetResumptionData failed to parse the given data",
+  "The cipher suite specified by resumption data is not enabled",
+  "The cipher suite specified by resumption data is not supported",
+  "The server's cipher suite doesn't match the resumption data",
 
   // Remember to add an element to the enum in public/error.h!
 

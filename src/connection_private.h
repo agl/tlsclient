@@ -37,7 +37,8 @@ struct ConnectionPrivate {
         read_cipher_spec(NULL),
         write_cipher_spec(NULL),
         pending_read_cipher_spec(NULL),
-        pending_write_cipher_spec(NULL) {
+        pending_write_cipher_spec(NULL),
+        session_id_len(0) {
   }
 
   ~ConnectionPrivate();
@@ -105,6 +106,11 @@ struct ConnectionPrivate {
   // to add some bytes at the beginning and end. So we return an array of
   // iovecs and the extra space comes from here:
   uint8_t scratch[64];
+  // If we are attempting a resume then this contains the offered session id
+  // until we receive a ServerHello. Afterwards it contains the server's chosen
+  // session id.
+  uint8_t session_id[32];
+  uint8_t session_id_len;
 };
 
 }  // namespace tlsclient

@@ -21,6 +21,9 @@ enum HandshakeState {
   SEND_PHASE_TWO,
   RECV_CHANGE_CIPHER_SPEC,
   RECV_FINISHED,
+  RECV_RESUME_CHANGE_CIPHER_SPEC,
+  RECV_RESUME_FINISHED,
+  SEND_RESUME_PHASE_ONE,
   // Changing something here? Don't forget to update
   // kPermittedHandshakeMessagesPerState!
 };
@@ -96,7 +99,6 @@ struct KeyBlock {
   };
 
   unsigned key_len, mac_len, iv_len;
-  uint8_t master_secret[48];
   uint8_t client_key[MAX_LEN];
   uint8_t server_key[MAX_LEN];
   uint8_t client_mac[MAX_LEN];

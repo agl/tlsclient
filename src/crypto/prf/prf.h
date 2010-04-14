@@ -10,12 +10,16 @@
 
 namespace tlsclient {
 
-bool KeysFromPreMasterSecret(TLSVersion version,
-                             KeyBlock* inout,
-                             const uint8_t* premaster, size_t premaster_len,
-                             // FIXME: make explicit uint8_t[N] types for clarity.
-                             const uint8_t* client_random,
-                             const uint8_t* server_random);
+bool MasterSecretFromPreMasterSecret(uint8_t master[48],
+                                     TLSVersion version,
+                                     const uint8_t* premaster, size_t premaster_len,
+                                     const uint8_t client_random[32],
+                                     const uint8_t server_random[32]);
+
+bool KeysFromMasterSecret(KeyBlock* inout, TLSVersion version,
+                          const uint8_t master[48],
+                          const uint8_t client_random[32],
+                          const uint8_t server_random[32]);
 
 class HandshakeHash {
  public:

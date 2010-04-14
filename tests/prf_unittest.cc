@@ -20,6 +20,7 @@ struct PRFTestCase {
   const char* premaster;
   const char* client_random;
   const char* server_random;
+  const char* master;
   unsigned mac_len;
   unsigned key_len;
   const char *client_mac;
@@ -34,6 +35,7 @@ static const PRFTestCase PRFTests[] = {
     "0302cac83ad4b1db3b9ab49ad05957de2a504a634a386fc600889321e1a971f57479466830ac3e6f468e87f5385fa0c5",
     "4ae66303755184a3917fcb44880605fcc53baa01912b22ed94473fc69cebd558",
     "4ae663020ec16e6bb5130be918cfcafd4d765979a3136a5d50c593446e4e44db",
+    "3d851bab6e5556e959a16bc36d66cfae32f672bfa9ecdef6096cbb1b23472df1da63dbbd9827606413221d149ed08ceb",
     20,
     16,
     "805aaa19b3d2c0a0759a4b6c9959890e08480119",
@@ -45,6 +47,7 @@ static const PRFTestCase PRFTests[] = {
     "03023f7527316bc12cbcd69e4b9e8275d62c028f27e65c745cfcddc7ce01bd3570a111378b63848127f1c36e5f9e4890",
     "4ae66364b5ea56b20ce4e25555aed2d7e67f42788dd03f3fee4adae0459ab106",
     "4ae66363ab815cbf6a248b87d6b556184e945e9b97fbdf247858b0bdafacfa1c",
+    "7d64be7c80c59b740200b4b9c26d0baaa1c5ae56705acbcf2307fe62beb4728c19392c83f20483801cce022c77645460",
     20,
     16,
     "97742ed60a0554ca13f04f97ee193177b971e3b0",
@@ -56,6 +59,7 @@ static const PRFTestCase PRFTests[] = {
     "832d515f1d61eebb2be56ba0ef79879efb9b527504abb386fb4310ed5d0e3b1f220d3bb6b455033a2773e6d8bdf951d278a187482b400d45deb88a5d5a6bb7d6a7a1decc04eb9ef0642876cd4a82d374d3b6ff35f0351dc5d411104de431375355addc39bfb1f6329fb163b0bc298d658338930d07d313cd980a7e3d9196cac1",
     "4ae663b2ee389c0de147c509d8f18f5052afc4aaf9699efe8cb05ece883d3a5e",
     "4ae664d503fd4cff50cfc1fb8fc606580f87b0fcdac9554ba0e01d785bdf278e",
+    "1aff2e7a2c4279d0126f57a65a77a8d9d0087cf2733366699bec27eb53d5740705a8574bb1acc2abbe90e44f0dd28d6c",
     20,
     16,
     "3c7647c93c1379a31a609542aa44e7f117a70085",
@@ -72,6 +76,7 @@ TEST_F(PRFTest, Simple) {
     uint8_t* premaster = new uint8_t[premaster_len];
     uint8_t client_random[32];
     uint8_t server_random[32];
+    uint8_t master[48];
 
     FromHex(premaster, test->premaster);
     FromHex(client_random, test->client_random);
@@ -82,7 +87,12 @@ TEST_F(PRFTest, Simple) {
     kb.mac_len = test->mac_len;
     kb.iv_len = 0;
 
-    KeysFromPreMasterSecret(TLSv10, &kb, premaster, premaster_len, client_random, server_random);
+    ASSERT_TRUE(MasterSecretFromPreMasterSecret(master, TLSv10, premaster, premaster_len, client_random, server_random));
+    char* master_hex = new char[48 * 2 + 1];
+    HexDump(master_hex, master, sizeof(master));
+    ASSERT_STREQ(master_hex, test->master);
+
+    ASSERT_TRUE(KeysFromMasterSecret(&kb, TLSv10, master, client_random, server_random));
 
     char* client_key = new char[test->key_len*2 + 1];
     char* server_key = new char[test->key_len*2 + 1];
@@ -103,6 +113,7 @@ TEST_F(PRFTest, Simple) {
     delete[] server_key;
     delete[] client_mac;
     delete[] server_mac;
+    delete[] master_hex;
   }
 }
 

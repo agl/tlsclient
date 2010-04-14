@@ -20,9 +20,17 @@ using namespace tlsclient;
 
 namespace {
 
+static const char kOpenSSLHelper[] = "./out/Default/openssl-helper";
+static const char kGnuTLSHelper[] = "./out/Default/gnutls-helper";
+
 class ConnectionTest : public ::testing::Test {
  protected:
   virtual void SetUp() {
+    client_ = -1;
+    child_ = -1;
+  }
+
+  void StartServer(const char* const args[]) {
     const int listener = socket(AF_INET, SOCK_STREAM, 0);
     assert(listener >= 0);
     struct sockaddr_in sin;
@@ -51,7 +59,6 @@ class ConnectionTest : public ::testing::Test {
         dup2(server, 3);
         close(server);
       }
-      static const char* const args[] = {"./out/Default/openssl-helper", NULL};
       execv(args[0], const_cast<char**>(args));
       static const char kMsg[] = "Failed to exec openssl helper\n";
       write(2, kMsg, sizeof(kMsg) - 1);
@@ -94,37 +101,43 @@ writea(int fd, const void* idata, size_t len) {
   return true;
 }
 
-TEST_F(ConnectionTest, Basic) {
-  OpenSSLContext ctx;
-  Connection conn(&ctx);
+static void MaybePrintResult(Result r) {
+  if (!r)
+    return;
+  char filename[8];
+  FilenameFromResult(filename, r);
+  fprintf(stderr, "%s:%d %s\n", filename, LineNumberFromResult(r), StringFromResult(r));
+}
+
+static void PerformConnection(const int fd, Connection* conn) {
   Result r;
 
-  conn.EnableDefault();
-  ASSERT_TRUE(conn.need_to_write());
-  ASSERT_FALSE(conn.is_server_verified());
-  ASSERT_FALSE(conn.is_server_cert_available());
-  ASSERT_FALSE(conn.is_ready_to_send_application_data());
+  ASSERT_TRUE(conn->need_to_write());
+  ASSERT_FALSE(conn->is_server_verified());
+  ASSERT_FALSE(conn->is_server_cert_available());
+  ASSERT_FALSE(conn->is_ready_to_send_application_data());
 
   Arena arena;
   std::vector<struct iovec> iovs;
   bool sent = false;
 
   for (;;) {
-    if (conn.need_to_write()) {
+    if (conn->need_to_write()) {
       struct iovec out;
-      Result r = conn.Get(&out);
+      r = conn->Get(&out);
+      MaybePrintResult(r);
       ASSERT_EQ(0, ErrorCodeFromResult(r));
-      ASSERT_TRUE(writea(client_, out.iov_base, out.iov_len));
+      ASSERT_TRUE(writea(fd, out.iov_base, out.iov_len));
     }
 
-    if (conn.is_ready_to_send_application_data() && !sent) {
+    if (conn->is_ready_to_send_application_data() && !sent) {
       struct iovec iov[3];
       char kMsg[] = "hello!";
       iov[1].iov_base = kMsg;
       iov[1].iov_len = sizeof(kMsg) - 1;
-      r = conn.Encrypt(&iov[0], &iov[2], &iov[1], 1);
+      r = conn->Encrypt(&iov[0], &iov[2], &iov[1], 1);
       ASSERT_EQ(0, ErrorCodeFromResult(r));
-      writev(client_, iov, 3);
+      writev(fd, iov, 3);
       sent = true;
     }
 
@@ -137,7 +150,7 @@ TEST_F(ConnectionTest, Basic) {
 
     ssize_t n;
     for (;;) {
-      n = read(client_, buf, kBufferLength);
+      n = read(fd, buf, kBufferLength);
       if (n == -1) {
         if (errno == EINTR)
           continue;
@@ -147,18 +160,13 @@ TEST_F(ConnectionTest, Basic) {
       break;
     }
 
-    if (!n)
-      return; // FIXME
+    ASSERT_LT(0, n);
 
     iov.iov_len = n;
     iovs.push_back(iov);
 
-    r = conn.Process(&out_iov, &out_n, &used, &iovs[0], iovs.size());
-    if (r) {
-      char filename[8];
-      FilenameFromResult(filename, r);
-      fprintf(stderr, "%s:%d %s\n", filename, LineNumberFromResult(r), StringFromResult(r));
-    }
+    r = conn->Process(&out_iov, &out_n, &used, &iovs[0], iovs.size());
+    MaybePrintResult(r);
     ASSERT_EQ(0, ErrorCodeFromResult(r));
 
     if (out_n) {
@@ -185,5 +193,37 @@ TEST_F(ConnectionTest, Basic) {
     }
   }
 }
+
+TEST_F(ConnectionTest, OpenSSLSimple) {
+  static const char* const args[] = {kOpenSSLHelper, NULL};
+
+  OpenSSLContext ctx;
+  Connection conn(&ctx);
+  conn.EnableDefault();
+  StartServer(args);
+  PerformConnection(client_, &conn);
+}
+
+TEST_F(ConnectionTest, GnuTLSSimple) {
+  static const char* const args[] = {kGnuTLSHelper, NULL};
+
+  OpenSSLContext ctx;
+  Connection conn(&ctx);
+  conn.EnableDefault();
+  StartServer(args);
+  PerformConnection(client_, &conn);
+}
+
+TEST_F(ConnectionTest, OpenSSLSNI) {
+  static const char* const args[] = {kOpenSSLHelper, "sni", NULL};
+
+  OpenSSLContext ctx;
+  Connection conn(&ctx);
+  conn.EnableDefault();
+  conn.set_host_name("test.example.com");
+  StartServer(args);
+  PerformConnection(client_, &conn);
+}
+
 
 }  // anonymous namespace
