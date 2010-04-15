@@ -178,7 +178,7 @@ static void PerformConnection(const int fd, Connection* conn) {
       if (n == -1) {
         if (errno == EINTR)
           continue;
-        ASSERT_EQ(errno, EINTR);
+        ASSERT_EQ(EINTR, errno);
         return;
       }
       break;
@@ -330,6 +330,31 @@ TEST_F(ConnectionTest, GnuTLSResume12) {
   ASSERT_EQ(0, ErrorCodeFromResult(r));
   PerformConnection(client_, &conn2);
   ASSERT_TRUE(conn2.did_resume());
+}
+
+TEST_F(ConnectionTest, OpenSSLSnapStart) {
+  static const char* const args[] = {kOpenSSLHelper, "snap-start", NULL};
+  Result r;
+
+  OpenSSLContext ctx;
+  Connection conn(&ctx);
+  conn.EnableDefault();
+  conn.CollectSnapStartData();
+  StartServer(args);
+  PerformConnection(client_, &conn);
+  ASSERT_FALSE(conn.did_resume());
+  ASSERT_TRUE(conn.is_snap_start_data_available());
+
+  struct iovec snap_start_data;
+  r = conn.GetSnapStartData(&snap_start_data);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+
+  Connection conn2(&ctx);
+  conn2.EnableDefault();
+  r = conn2.SetSnapStartData(static_cast<uint8_t*>(snap_start_data.iov_base), snap_start_data.iov_len);
+  MaybePrintResult(r);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+  PerformConnection(client_, &conn2);
 }
 
 }  // anonymous namespace

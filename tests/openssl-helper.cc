@@ -27,17 +27,18 @@ main(int argc, char **argv) {
   OpenSSL_add_all_algorithms();
   SSL_load_error_strings();
 
-  bool sni = false, sni_good = false;
+  bool sni = false, sni_good = false, snap_start = false;
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "sni") == 0) {
       sni = true;
+    } else if (strcmp(argv[i], "snap-start") == 0) {
+      snap_start = true;
     } else {
       fprintf(stderr, "Unknown argument: %s\n", argv[i]);
       return 1;
     }
   }
 
-  BIO* bio = BIO_new_socket(3, 0 /* don't take ownership of fd */);
   SSL_CTX* ctx = SSL_CTX_new(TLSv1_server_method());
 
   if (sni) {
@@ -87,36 +88,50 @@ main(int argc, char **argv) {
     return 1;
   }
 
-  SSL* server = SSL_new(ctx);
-  SSL_set_bio(server, bio, bio);
+  unsigned connection_limit = 1;
+  if (snap_start)
+    connection_limit = 2;
 
-  int err;
-  for (;;) {
-    const int ret = SSL_accept(server);
-    if (ret != 1) {
-      err = SSL_get_error(server, ret);
-      if (err == SSL_ERROR_WANT_READ)
-        continue;
-      ERR_print_errors_fp(stderr);
-      fprintf(stderr, "SSL_accept failed: %d\n", err);
-      return 0;
-    } else {
-      break;
+  for (unsigned connections = 0; connections < connection_limit; connections++) {
+    SSL* server = SSL_new(ctx);
+    BIO* bio = BIO_new_socket(3, 0 /* don't take ownership of fd */);
+    SSL_set_bio(server, bio, bio);
+
+    int err;
+    for (;;) {
+      const int ret = SSL_accept(server);
+      if (ret != 1) {
+        err = SSL_get_error(server, ret);
+        if (err == SSL_ERROR_WANT_READ)
+          continue;
+        ERR_print_errors_fp(stderr);
+        fprintf(stderr, "SSL_accept failed: %d\n", err);
+        return 1;
+      } else {
+        fprintf(stderr, "SSL_accept ok\n");
+        break;
+      }
     }
-  }
 
-  if (sni && !sni_good) {
-    fprintf(stderr, "SNI failed\n");
-    return 1;
-  }
+    if (sni && !sni_good) {
+      fprintf(stderr, "SNI failed\n");
+      return 1;
+    }
 
-  char buffer[6];
-  SSL_read(server, buffer, sizeof(buffer));
-  if (memcmp(buffer, "hello!", sizeof(buffer)) == 0) {
-    SSL_write(server, "goodbye!", 8);
-  }
+    char buffer[6];
+    int ret = SSL_read(server, buffer, sizeof(buffer));
+    if (ret == -1) {
+      err = SSL_get_error(server, ret);
+      ERR_print_errors_fp(stderr);
+      fprintf(stderr, "SSL_read failed: %d\n", err);
+    }
+    if (memcmp(buffer, "hello!", sizeof(buffer)) == 0) {
+      SSL_write(server, "goodbye!", 8);
+    }
 
-  SSL_shutdown(server);
+    SSL_shutdown(server);
+    SSL_free(server);
+  }
 
   return 0;
 }

@@ -394,18 +394,21 @@ static const HandshakeMessage kPermittedHandshakeMessagesPerState[][2] = {
   /* RECV_RESUME_CHANGE_CIPHER_SPEC */ { CHANGE_CIPHER_SPEC, INVALID_MESSAGE },
   /* RECV_RESUME_FINISHED */ { FINISHED, INVALID_MESSAGE },
   /* SEND_RESUME_PHASE_ONE */ { INVALID_MESSAGE },
+  /* RECV_SNAP_START_SERVER_HELLO */ { SERVER_HELLO, INVALID_MESSAGE },
+  /* RECV_SNAP_START_SERVER_CERTIFICATE */ { CERTIFICATE, INVALID_MESSAGE },
+  /* RECV_SNAP_START_SERVER_HELLO_DONE */ { SERVER_HELLO_DONE, INVALID_MESSAGE },
 };
 
-static void AddHandshakeMessageToVerifyHash(ConnectionPrivate* priv, HandshakeMessage type, Buffer* in) {
+static void AddHandshakeMessageToVerifyHash(HandshakeHash* handshake_hash, HandshakeMessage type, Buffer* in) {
   uint8_t header[4];
   header[0] = static_cast<uint8_t>(type);
   header[1] = in->size() >> 16;
   header[2] = in->size() >> 8;
   header[3] = in->size();
-  priv->handshake_hash->Update(header, sizeof(header));
+  handshake_hash->Update(header, sizeof(header));
   for (unsigned i = 0; i < in->iovec_len(); i++) {
     const struct iovec& iov = in->iovec()[i];
-    priv->handshake_hash->Update(iov.iov_base, iov.iov_len);
+    handshake_hash->Update(iov.iov_base, iov.iov_len);
   }
 }
 
@@ -419,8 +422,12 @@ Result ProcessHandshakeMessage(ConnectionPrivate* priv, HandshakeMessage type, B
   }
 
   if (priv->handshake_hash &&
-      type != FINISHED && type != SERVER_HELLO && type != CHANGE_CIPHER_SPEC)
-    AddHandshakeMessageToVerifyHash(priv, type, in);
+      type != FINISHED && type != SERVER_HELLO && type != CHANGE_CIPHER_SPEC &&
+      priv->state != RECV_SNAP_START_SERVER_HELLO &&
+      priv->state != RECV_SNAP_START_SERVER_CERTIFICATE &&
+      priv->state != RECV_SNAP_START_SERVER_HELLO_DONE) {
+    AddHandshakeMessageToVerifyHash(priv->handshake_hash, type, in);
+  }
 
   switch (type) {
     case SERVER_HELLO:
@@ -453,6 +460,13 @@ Result ProcessHandshakeMessage(ConnectionPrivate* priv, HandshakeMessage type, B
 
 Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
   bool ok;
+
+  if (priv->state == RECV_SNAP_START_SERVER_HELLO) {
+    priv->state = RECV_SNAP_START_SERVER_CERTIFICATE;
+    return 0;
+  }
+
+  const Buffer::Pos start_of_server_hello = in->Tell();
 
   uint16_t server_wire_version;
   if (!in->U16(&server_wire_version))
@@ -532,7 +546,7 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
     // five bytes.
     priv->handshake_hash->Update(priv->last_buffer + 5, priv->last_buffer_len - 5);
   }
-  AddHandshakeMessageToVerifyHash(priv, SERVER_HELLO, in);
+  AddHandshakeMessageToVerifyHash(priv->handshake_hash, SERVER_HELLO, in);
 
   if (resumption) {
     Result r = SetupCiperSpec(priv);
@@ -559,11 +573,28 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
   if (in->remaining())
     return ERROR_RESULT(ERR_HANDSHAKE_TRAILING_DATA);
 
+  if (priv->server_supports_snap_start && priv->collect_snap_start) {
+    const Buffer::Pos end = in->Tell();
+    in->Seek(start_of_server_hello);
+    const size_t server_hello_len = in->remaining();
+    uint8_t* server_hello = static_cast<uint8_t*>(priv->arena.Allocate(server_hello_len));
+    if (!in->Read(server_hello, server_hello_len))
+      return ERROR_RESULT(ERR_INTERNAL_ERROR);
+    priv->snap_start_server_hello.iov_base = server_hello;
+    priv->snap_start_server_hello.iov_len = server_hello_len;
+    in->Seek(end);
+  }
+
   return 0;
 }
 
 Result ProcessServerCertificate(ConnectionPrivate* priv, Buffer* in) {
   bool ok;
+
+  if (priv->state == RECV_SNAP_START_SERVER_CERTIFICATE) {
+    priv->state = RECV_SNAP_START_SERVER_HELLO_DONE;
+    return 0;
+  }
 
   Buffer certificates(in->VariableLength(&ok, 3));
   if (!ok)
@@ -602,7 +633,14 @@ Result ProcessServerHelloDone(ConnectionPrivate* priv, Buffer* in) {
   if (in->remaining())
     return ERROR_RESULT(ERR_HANDSHAKE_TRAILING_DATA);
 
-  priv->state = SEND_PHASE_TWO;
+  if (priv->server_supports_snap_start && priv->collect_snap_start)
+    priv->snap_start_data_available = true;
+
+  if (priv->state == RECV_SNAP_START_SERVER_HELLO_DONE) {
+    priv->state = RECV_CHANGE_CIPHER_SPEC;
+  } else {
+    priv->state = SEND_PHASE_TWO;
+  }
 
   return 0;
 }
@@ -628,7 +666,7 @@ Result ProcessServerFinished(ConnectionPrivate* priv, Buffer* in) {
   if (priv->state == RECV_FINISHED) {
     priv->state = AWAIT_HELLO_REQUEST;
   } else {
-    AddHandshakeMessageToVerifyHash(priv, FINISHED, in);
+    AddHandshakeMessageToVerifyHash(priv->handshake_hash, FINISHED, in);
     priv->state = SEND_RESUME_PHASE_ONE;
   }
 

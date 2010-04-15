@@ -14,12 +14,16 @@
 #include "tlsclient/src/handshake.h"
 #include "tlsclient/src/sink.h"
 
+#include <stdio.h>
+
 namespace tlsclient {
 
 ConnectionPrivate::~ConnectionPrivate() {
   delete server_cert;
   memset(master_secret, 0, sizeof(master_secret));
   delete handshake_hash;
+  delete snap_start_handshake_hash;
+  delete predicted_server_cert;
 
   if (read_cipher_spec)
     read_cipher_spec->DecRef();
@@ -82,6 +86,17 @@ static Result EncryptRecord(ConnectionPrivate* priv, Sink* sink) {
   return 0;
 }
 
+static void hexdump(const void* data, size_t length) {
+  const uint8_t* in = static_cast<const uint8_t*>(data);
+
+  for (size_t i = 0; i < length; i++) {
+    printf("%x", in[i] >> 4);
+    printf("%x", in[i] & 15);
+  }
+
+  printf("\n");
+}
+
 Result Connection::Get(struct iovec* out) {
   Result r;
 
@@ -105,11 +120,24 @@ Result Connection::Get(struct iovec* out) {
       // point because we don't know which hash function we'll be using until
       // we get the ServerHello.
     }
-    if ((r = EncryptRecord(priv_, &s)))
-      return r;
-    priv_->state = RECV_SERVER_HELLO;
-  } else if (priv_->state == SEND_PHASE_TWO ||
-             priv_->state == SEND_RESUME_PHASE_ONE) {
+    if (priv_->snap_start_attempt) {
+      priv_->handshake_hash = HandshakeHashForVersion(priv_->predicted_server_version);
+      if (!priv_->handshake_hash)
+        return ERROR_RESULT(ERR_INTERNAL_ERROR);
+      priv_->handshake_hash->Update(s.data(), s.size());
+      hexdump(s.data(), s.size());
+      priv_->handshake_hash->Update(priv_->predicted_response.iov_base, priv_->predicted_response.iov_len);
+      hexdump(priv_->predicted_response.iov_base, priv_->predicted_response.iov_len);
+      priv_->state = SEND_PHASE_TWO;
+    } else {
+      if ((r = EncryptRecord(priv_, &s)))
+        return r;
+      priv_->state = RECV_SERVER_HELLO;
+    }
+  }
+
+  if (priv_->state == SEND_PHASE_TWO ||
+      priv_->state == SEND_RESUME_PHASE_ONE) {
     Result r;
     if (priv_->state == SEND_PHASE_TWO) {
       Sink s(sink.Record(priv_->version, RECORD_HANDSHAKE));
@@ -145,16 +173,16 @@ Result Connection::Get(struct iovec* out) {
         return r;
     }
 
-    if (priv_->false_start)
+    if (priv_->false_start || priv_->snap_start_attempt)
       priv_->can_send_application_data = true;
 
-    if (priv_->state == SEND_PHASE_TWO) {
+    if (priv_->snap_start_attempt) {
+      priv_->state = RECV_SNAP_START_SERVER_HELLO;
+    } else if (priv_->state == SEND_PHASE_TWO) {
       priv_->state = RECV_CHANGE_CIPHER_SPEC;
     } else {
       priv_->state = AWAIT_HELLO_REQUEST;
     }
-  } else {
-    return ERROR_RESULT(ERR_INTERNAL_ERROR);
   }
 
   priv_->last_buffer = sink.Release();
@@ -208,6 +236,8 @@ Result Connection::Encrypt(struct iovec* start, struct iovec* end, const struct 
   uint8_t* const header = priv_->scratch;
   header[0] = RECORD_APPLICATION_DATA;
   uint16_t wire_version = static_cast<uint16_t>(priv_->version);
+  if (priv_->snap_start_attempt)
+    wire_version = static_cast<uint16_t>(priv_->predicted_server_version);
   header[1] = wire_version >> 8;
   header[2] = wire_version;
   header[3] = len >> 8;
@@ -381,6 +411,132 @@ bool Connection::did_resume() const {
 
 void Connection::EnableFalseStart() {
   priv_->false_start = true;
+}
+
+void Connection::CollectSnapStartData() {
+  priv_->collect_snap_start = true;
+}
+
+bool Connection::is_snap_start_data_available() const {
+  return priv_->snap_start_data_available;
+}
+
+static const uint8_t kSnapStartSerialisationVersion = 0;
+
+Result Connection::GetSnapStartData(struct iovec* iov) {
+  Sink sink(&priv_->arena);
+
+  if (!is_snap_start_data_available())
+    return ERROR_RESULT(ERR_SNAP_START_DATA_NOT_READY);
+
+  sink.U8(kSnapStartSerialisationVersion);
+
+  sink.U16(static_cast<uint16_t>(priv_->version));
+  sink.U16(static_cast<uint16_t>(priv_->cipher_suite->value));
+
+  {
+    Sink server_hello_sink(sink.VariableLengthBlock(2));
+    uint8_t* server_hello = server_hello_sink.Block(priv_->snap_start_server_hello.iov_len);
+    memcpy(server_hello, priv_->snap_start_server_hello.iov_base, priv_->snap_start_server_hello.iov_len);
+  }
+
+  {
+    Sink certs_sink(sink.VariableLengthBlock(3));
+
+    for (std::vector<struct iovec>::const_iterator i = priv_->server_certificates.begin(); i != priv_->server_certificates.end(); i++) {
+      Sink cert_sink(certs_sink.VariableLengthBlock(3));
+      uint8_t* cert = cert_sink.Block(i->iov_len);
+      memcpy(cert, i->iov_base, i->iov_len);
+    }
+  }
+
+  iov->iov_base = sink.Release();
+  iov->iov_len = sink.size();
+
+  return 0;
+}
+
+Result Connection::SetSnapStartData(const uint8_t* data, size_t len) {
+  const struct iovec iov = {const_cast<uint8_t*>(data), len};
+  Buffer buf(&iov, 1);
+  bool ok;
+  Sink predicted_response(&priv_->arena);
+
+  uint8_t version;
+  if (!buf.Read(&version, 1) || version != kSnapStartSerialisationVersion)
+    return ERROR_RESULT(ERR_CANNOT_PARSE_SNAP_START_DATA);
+
+  uint16_t wire_version;
+  if (!buf.U16(&wire_version))
+    return ERROR_RESULT(ERR_CANNOT_PARSE_SNAP_START_DATA);
+  priv_->predicted_server_version = static_cast<TLSVersion>(wire_version);
+
+  uint16_t cipher_suite_value;
+  if (!buf.U16(&cipher_suite_value))
+    return ERROR_RESULT(ERR_CANNOT_PARSE_SNAP_START_DATA);
+
+  const CipherSuite* suites = AllCipherSuites();
+  const CipherSuite* cipher_suite = NULL;
+  for (unsigned i = 0; suites[i].flags; i++) {
+    if (suites[i].value == cipher_suite_value) {
+      if ((suites[i].flags & priv_->cipher_suite_flags_enabled) == suites[i].flags) {
+        cipher_suite = &suites[i];
+        break;
+      }
+    }
+  }
+
+  if (!cipher_suite)
+    return ERROR_RESULT(ERR_RESUME_CIPHER_SUITE_NOT_FOUND);
+
+  priv_->cipher_suite = cipher_suite;
+
+  Buffer server_hello_buf(buf.VariableLength(&ok, 2));
+  if (!ok)
+    return ERROR_RESULT(ERR_CANNOT_PARSE_SNAP_START_DATA);
+
+  const size_t server_hello_len = server_hello_buf.remaining();
+  {
+    Sink server_hello_sink(predicted_response.HandshakeMessage(SERVER_HELLO));
+    uint8_t* server_hello = server_hello_sink.Block(server_hello_len);
+    if (!server_hello_buf.Read(server_hello, server_hello_len))
+      return ERROR_RESULT(ERR_INTERNAL_ERROR);
+  }
+
+  Buffer certs_buf(buf.VariableLength(&ok, 3));
+  if (!ok)
+    return ERROR_RESULT(ERR_CANNOT_PARSE_SNAP_START_DATA);
+  {
+    Sink cert_msg_sink(predicted_response.HandshakeMessage(CERTIFICATE));
+    Sink certs_sink(cert_msg_sink.VariableLengthBlock(3));
+    bool first_cert = true;
+
+    while (certs_buf.remaining()) {
+      Sink cert_sink(certs_sink.VariableLengthBlock(3));
+      Buffer cert_buf(certs_buf.VariableLength(&ok, 3));
+      if (!ok)
+        return ERROR_RESULT(ERR_CANNOT_PARSE_SNAP_START_DATA);
+      const size_t len = cert_buf.remaining();
+      uint8_t* cert = cert_sink.Block(len);
+      if (!cert_buf.Read(cert, len))
+        return ERROR_RESULT(ERR_INTERNAL_ERROR);
+      if (first_cert) {
+        first_cert = false;
+        priv_->server_cert = priv_->ctx->ParseCertificate(cert, len);
+        if (!priv_->server_cert)
+          return ERROR_RESULT(ERR_CANNOT_PARSE_CERTIFICATE);
+      }
+    }
+  }
+
+  predicted_response.HandshakeMessage(SERVER_HELLO_DONE);
+
+  priv_->predicted_response.iov_len = predicted_response.size();
+  priv_->predicted_response.iov_base = predicted_response.Release();
+  priv_->snap_start_attempt = true;
+  priv_->version = priv_->predicted_server_version;
+
+  return 0;
 }
 
 }  // namespace tlsclient

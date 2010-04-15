@@ -71,6 +71,8 @@ static const char kErrorStrings[][70] = {
   "The cipher suite specified by resumption data is not enabled",
   "The cipher suite specified by resumption data is not supported",
   "The server's cipher suite doesn't match the resumption data",
+  "GetSnapStartData called before the snap start data is ready",
+  "Connection::SetSnapStartData failed to parse the given data",
 
   // Remember to add an element to the enum in public/error.h!
 

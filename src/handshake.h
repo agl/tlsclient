@@ -24,6 +24,9 @@ enum HandshakeState {
   RECV_RESUME_CHANGE_CIPHER_SPEC,
   RECV_RESUME_FINISHED,
   SEND_RESUME_PHASE_ONE,
+  RECV_SNAP_START_SERVER_HELLO,
+  RECV_SNAP_START_SERVER_CERTIFICATE,
+  RECV_SNAP_START_SERVER_HELLO_DONE,
   // Changing something here? Don't forget to update
   // kPermittedHandshakeMessagesPerState!
 };
@@ -112,6 +115,7 @@ struct ConnectionPrivate;
 class Buffer;
 
 bool IsValidAlertLevel(uint8_t wire_level);
+bool IsValidVersion(uint16_t wire_version);
 Result MarshalClientHello(Sink* sink, ConnectionPrivate* priv);
 Result MarshalClientKeyExchange(Sink* sink, ConnectionPrivate* priv);
 Result MarshalFinished(Sink* sink, ConnectionPrivate* priv);

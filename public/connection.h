@@ -145,6 +145,12 @@ class Connection {
   //   out_len: (output) on return, the number of elements in |out_iovs|.
   Result server_certificates(struct iovec** out_iovs, unsigned** out_len);
 
+  void CollectSnapStartData();
+  bool is_snap_start_data_available() const;
+  Result GetSnapStartData(struct iovec* iov);
+  Result SetSnapStartData(const uint8_t* data, size_t len);
+  bool did_snap_start();
+
   // set_sslv3 sets whether we should use SSLv3 only. This should never need to
   // be called except to work around buggy TLS server that are intollerant of
   // extensions.

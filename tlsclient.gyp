@@ -20,6 +20,7 @@
         'src/handshake.cc',
         'src/record.cc',
         'src/crypto/cipher_suites.cc',
+        'src/crypto/fnv1a64/fnv1a64.cc',
         'src/crypto/md5/md5.cc',
         'src/crypto/prf/prf.cc',
         'src/crypto/rc4/rc4.cc',
@@ -88,10 +89,14 @@
     {
       'target_name': 'openssl-helper',
       'type': 'executable',
+      'include_dirs': [
+        '/home/agl/devel/openssl-0.9.8m/include',
+      ],
       'sources': [
         'tests/openssl-helper.cc',
       ],
       'ldflags': [
+        '-L/home/agl/devel/openssl-0.9.8m',
         '-lcrypto',
         '-lssl',
       ],

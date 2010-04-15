@@ -43,7 +43,12 @@ struct ConnectionPrivate {
         did_resume(false),
         resumption_data_ready(false),
         false_start(false),
-        snap_start(false) {
+        collect_snap_start(false),
+        server_supports_snap_start(false),
+        snap_start_data_available(false),
+        snap_start_attempt(false),
+        snap_start_handshake_hash(NULL),
+        predicted_server_cert(NULL) {
   }
 
   ~ConnectionPrivate();
@@ -128,7 +133,17 @@ struct ConnectionPrivate {
   // resumption.)
   bool resumption_data_ready;
   bool false_start;
-  bool snap_start;
+
+  bool collect_snap_start;
+  bool server_supports_snap_start;
+  bool snap_start_data_available;
+  struct iovec snap_start_server_hello;
+
+  bool snap_start_attempt;
+  TLSVersion predicted_server_version;
+  struct iovec predicted_response;
+  HandshakeHash* snap_start_handshake_hash;
+  Certificate* predicted_server_cert;
 };
 
 }  // namespace tlsclient

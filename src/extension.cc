@@ -4,12 +4,15 @@
 
 #include "tlsclient/src/extension.h"
 
+#include "tlsclient/public/context.h"
 #include "tlsclient/src/base-internal.h"
 #include "tlsclient/src/buffer.h"
 #include "tlsclient/src/connection_private.h"
 #include "tlsclient/src/error-internal.h"
 #include "tlsclient/src/handshake.h"
 #include "tlsclient/src/sink.h"
+#include "tlsclient/src/crypto/fnv1a64/fnv1a64.h"
+#include "tlsclient/src/crypto/prf/prf.h"
 
 namespace tlsclient {
 
@@ -67,12 +70,60 @@ class ServerNameIndication : public Extension {
   }
 };
 
-RenegotiationInfo g_renegotiation_info;
-ServerNameIndication g_sni;
+class SnapStart : public Extension {
+ public:
+  uint16_t value() const {
+    return 13174;
+  }
+
+  bool ShouldBeIncluded(ConnectionPrivate* priv) const {
+    return true;
+  }
+
+  Result Marshal(Sink* sink, ConnectionPrivate* priv) const {
+    if (priv->snap_start_attempt) {
+      // The first four bytes of the suggested server random are the same as the
+      // first four of our random.
+      memcpy(priv->server_random, priv->client_random, 4);
+      // The next four bytes are the server's epoch, which we currently take to
+      // be zero.
+      memset(priv->server_random + 4, 0, 8);
+      // And the remainder is random.
+      if (!priv->ctx->RandomBytes(priv->server_random + 12, sizeof(priv->server_random) - 12))
+        return ERROR_RESULT(ERR_RANDOM_BYTES_FAILED);
+
+      // The first four bytes of the server random are the same as the client
+      // random and we don't bother sending them.
+      uint8_t* server_random = sink->Block(sizeof(priv->server_random) - 4);
+      memcpy(server_random, priv->server_random + 4, sizeof(priv->server_random) - 4);
+
+      // We poke the suggested server random into our predicted response. The
+      // server random starts two bytes from the start of the ServerHello and
+      // there's four bytes of handshake protocol header.
+      memcpy(static_cast<uint8_t*>(priv->predicted_response.iov_base) + 4 + 2, priv->server_random, sizeof(priv->server_random));
+
+      FNV1a64 fnv;
+      fnv.Update(priv->predicted_response.iov_base, priv->predicted_response.iov_len);
+      uint8_t* predicted_hash = sink->Block(FNV1a64::DIGEST_SIZE);
+      fnv.Final(predicted_hash);
+    }
+    return 0;
+  }
+
+  Result Process(Buffer* extension, ConnectionPrivate* priv) const {
+    priv->server_supports_snap_start = true;
+    return 0;
+  }
+};
+
+static RenegotiationInfo g_renegotiation_info;
+static ServerNameIndication g_sni;
+static SnapStart g_snap_start;
 
 static const Extension* kExtensions[] = {
   &g_renegotiation_info,
   &g_sni,
+  &g_snap_start,
 };
 
 static Result MaybeIncludeExtension(const Extension* ext, Sink *sink, ConnectionPrivate* priv) {
@@ -124,5 +175,25 @@ Result ProcessServerHelloExtensions(Buffer* extensions, ConnectionPrivate* priv)
 
   return 0;
 }
+
+#if 0
+class FNV1a64HandshakeHash : public HandshakeHash {
+ public:
+  virtual void Update(const void* data, size_t length) {
+    fnv_.Update(data, length);
+  }
+
+  virtual const uint8_t* ClientVerifyData(unsigned* out_size, const uint8_t* master_secret, size_t master_secret_len) {
+    return NULL;
+  }
+
+  virtual const uint8_t* ServerVerifyData(unsigned* out_size, const uint8_t* master_secret, size_t master_secret_len) {
+    return NULL;
+  }
+
+ private:
+  FNV1a64 fnv_;
+}
+#endif
 
 }  // namespace tlsclient
