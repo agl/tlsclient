@@ -30,6 +30,7 @@ struct ConnectionPrivate {
         partial_record_remaining(0),
         pending_records_decrypted(0),
         application_data_allowed(false),
+        can_send_application_data(false),
         cipher_suite(NULL),
         server_supports_renegotiation_info(false),
         server_cert(NULL),
@@ -40,7 +41,9 @@ struct ConnectionPrivate {
         pending_write_cipher_spec(NULL),
         session_id_len(0),
         did_resume(false),
-        resumption_data_ready(false) {
+        resumption_data_ready(false),
+        false_start(false),
+        snap_start(false) {
   }
 
   ~ConnectionPrivate();
@@ -80,6 +83,10 @@ struct ConnectionPrivate {
   // This is true iff we have completed a handshake and are happy to pass
   // application data records to the client.
   bool application_data_allowed;
+  // This is true iff we are happy to send application data to the peer.
+  // Typically this is only true if we have completed the handshake but False
+  // Start and Snap Start alter this.
+  bool can_send_application_data;
   uint8_t client_random[32];
   uint8_t server_random[32];
   const CipherSuite* cipher_suite;
@@ -120,6 +127,8 @@ struct ConnectionPrivate {
   // (Note that session_id_len may still be zero if the server didn't offer
   // resumption.)
   bool resumption_data_ready;
+  bool false_start;
+  bool snap_start;
 };
 
 }  // namespace tlsclient

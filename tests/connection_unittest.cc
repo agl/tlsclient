@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <sys/socket.h>
+#include <netinet/tcp.h>
 
 #include <gtest/gtest.h>
 
@@ -45,6 +46,9 @@ class ConnectionTest : public ::testing::Test {
     const int client = socket(AF_INET, SOCK_STREAM, 0);
     assert(client >= 0);
     assert(connect(client, (struct sockaddr*) &sin, sizeof(sin)) == 0);
+
+    static const int on = 1;
+    setsockopt(client, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
 
     const int server = accept(listener, NULL, NULL);
     assert(server >= 0);
@@ -126,6 +130,8 @@ static void PerformConnection(const int fd, Connection* conn) {
   Arena arena;
   std::vector<struct iovec> iovs;
   bool sent = false;
+  bool corked = false;
+  int buffer_length = 0;
 
   for (;;) {
     if (conn->need_to_write()) {
@@ -133,6 +139,11 @@ static void PerformConnection(const int fd, Connection* conn) {
       r = conn->Get(&out);
       MaybePrintResult(r);
       ASSERT_EQ(0, ErrorCodeFromResult(r));
+      if (conn->is_ready_to_send_application_data() && !sent) {
+        static const int on = 1;
+        setsockopt(fd, IPPROTO_TCP, TCP_CORK, &on, sizeof(on));
+        corked = true;
+      }
       ASSERT_TRUE(writea(fd, out.iov_base, out.iov_len));
     }
 
@@ -145,10 +156,17 @@ static void PerformConnection(const int fd, Connection* conn) {
       ASSERT_EQ(0, ErrorCodeFromResult(r));
       writev(fd, iov, 3);
       sent = true;
+      if (corked) {
+        static const int off = 0;
+        setsockopt(fd, IPPROTO_TCP, TCP_CORK, &off, sizeof(off));
+        corked = false;
+      }
     }
 
-    static const size_t kBufferLength = 1;
-    uint8_t* buf = static_cast<uint8_t*>(arena.Allocate(kBufferLength));
+    buffer_length++;
+    if (buffer_length == 6)
+      buffer_length = 1;
+    uint8_t* buf = static_cast<uint8_t*>(arena.Allocate(buffer_length));
     struct iovec iov, *out_iov;
     iov.iov_base = buf;
     unsigned out_n;
@@ -156,7 +174,7 @@ static void PerformConnection(const int fd, Connection* conn) {
 
     ssize_t n;
     for (;;) {
-      n = read(fd, buf, kBufferLength);
+      n = read(fd, buf, buffer_length);
       if (n == -1) {
         if (errno == EINTR)
           continue;
@@ -242,6 +260,28 @@ TEST_F(ConnectionTest, OpenSSLSNI) {
   PerformConnection(client_, &conn);
 }
 
+TEST_F(ConnectionTest, OpenSSLFalseStart) {
+  static const char* const args[] = {kOpenSSLHelper, NULL};
+
+  OpenSSLContext ctx;
+  Connection conn(&ctx);
+  conn.EnableDefault();
+  conn.EnableFalseStart();
+  StartServer(args);
+  PerformConnection(client_, &conn);
+}
+
+TEST_F(ConnectionTest, GnuTLSFalseStart) {
+  static const char* const args[] = {kGnuTLSHelper, NULL};
+
+  OpenSSLContext ctx;
+  Connection conn(&ctx);
+  conn.EnableDefault();
+  conn.EnableFalseStart();
+  StartServer(args);
+  PerformConnection(client_, &conn);
+}
+
 TEST_F(ConnectionTest, GnuTLSResume) {
   static const char* const args[] = {kGnuTLSHelper, "resume", NULL};
   Result r;
@@ -264,7 +304,32 @@ TEST_F(ConnectionTest, GnuTLSResume) {
   MaybePrintResult(r);
   ASSERT_EQ(0, ErrorCodeFromResult(r));
   PerformConnection(client_, &conn2);
-  ASSERT_TRUE(conn.did_resume());
+  ASSERT_TRUE(conn2.did_resume());
+}
+
+TEST_F(ConnectionTest, GnuTLSResume12) {
+  static const char* const args[] = {kGnuTLSHelper, "resume", "tls1.2", NULL};
+  Result r;
+
+  OpenSSLContext ctx;
+  Connection conn(&ctx);
+  conn.EnableDefault();
+  StartServer(args);
+  PerformConnection(client_, &conn);
+  ASSERT_FALSE(conn.did_resume());
+  ASSERT_TRUE(conn.is_resumption_data_availible());
+
+  struct iovec resumption_data;
+  r = conn.GetResumptionData(&resumption_data);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+
+  Connection conn2(&ctx);
+  conn2.EnableDefault();
+  r = conn2.SetResumptionData(static_cast<uint8_t*>(resumption_data.iov_base), resumption_data.iov_len);
+  MaybePrintResult(r);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+  PerformConnection(client_, &conn2);
+  ASSERT_TRUE(conn2.did_resume());
 }
 
 }  // anonymous namespace

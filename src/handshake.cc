@@ -623,10 +623,12 @@ Result ProcessServerFinished(ConnectionPrivate* priv, Buffer* in) {
     return ERROR_RESULT(ERR_BAD_VERIFY);
 
   priv->application_data_allowed = true;
+  priv->can_send_application_data = true;
 
   if (priv->state == RECV_FINISHED) {
     priv->state = AWAIT_HELLO_REQUEST;
   } else {
+    AddHandshakeMessageToVerifyHash(priv, FINISHED, in);
     priv->state = SEND_RESUME_PHASE_ONE;
   }
 

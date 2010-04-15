@@ -157,6 +157,8 @@ class Connection {
   void EnableRC4(bool enable);
   void EnableSHA(bool enable);
 
+  void EnableFalseStart();
+
   // Set sensible defaults.
   void EnableDefault();
 

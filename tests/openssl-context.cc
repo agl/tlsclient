@@ -4,7 +4,10 @@
 
 #include "tlsclient/tests/openssl-context.h"
 
+#include <unistd.h>
+#include <fcntl.h>
 #include <time.h>
+
 #include <openssl/rand.h>
 #include <openssl/x509.h>
 #include <openssl/rsa.h>
@@ -41,7 +44,14 @@ class OpenSSLCertificate : public tlsclient::Certificate {
 };
 
 bool OpenSSLContext::RandomBytes(void* buffer, size_t len) {
+#if 0
+  static int urandom_fd = -1;
+  if (urandom_fd == -1)
+    urandom_fd = open("/dev/urandom", O_RDONLY);
+  return read(urandom_fd, buffer, len) == static_cast<ssize_t>(len);
+#else
   return RAND_bytes(static_cast<unsigned char*>(buffer), len) == 1;
+#endif
 }
 
 uint64_t OpenSSLContext::EpochSeconds() {

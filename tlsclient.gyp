@@ -65,6 +65,7 @@
       'type': 'executable',
       'include_dirs': [
         '..',
+        '/home/agl/devel/openssl-0.9.8m/include',
       ],
       'sources': [
         'tests/connection_unittest.cc',
@@ -75,6 +76,7 @@
       ],
       'ldflags': [
         '-L/home/agl/lib',
+        '-L/home/agl/devel/openssl-0.9.8m',
         '-lpthread',
         '-lgtest',
         '-lgtest_main',

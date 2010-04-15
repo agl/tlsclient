@@ -47,6 +47,7 @@ bool Connection::need_to_write() const {
   switch (priv_->state) {
   case SEND_PHASE_ONE:
   case SEND_PHASE_TWO:
+  case SEND_RESUME_PHASE_ONE:
     return true;
   default:
     return false;
@@ -62,7 +63,7 @@ bool Connection::is_server_verified() const {
 }
 
 bool Connection::is_ready_to_send_application_data() const {
-  return priv_->state == AWAIT_HELLO_REQUEST;
+  return priv_->can_send_application_data;
 }
 
 static Result EncryptRecord(ConnectionPrivate* priv, Sink* sink) {
@@ -143,6 +144,9 @@ Result Connection::Get(struct iovec* out) {
       if ((r = EncryptRecord(priv_, &s)))
         return r;
     }
+
+    if (priv_->false_start)
+      priv_->can_send_application_data = true;
 
     if (priv_->state == SEND_PHASE_TWO) {
       priv_->state = RECV_CHANGE_CIPHER_SPEC;
@@ -271,12 +275,12 @@ Result Connection::Process(struct iovec** out, unsigned* out_n, size_t* used,
         in.Read(&wire_level, 1);
         if (!IsValidAlertLevel(wire_level))
           return ERROR_RESULT(ERR_INVALID_ALERT_LEVEL);
-        const AlertLevel level = static_cast<AlertLevel>(level);
-        if (level == ALERT_LEVEL_WARNING)
+        const AlertLevel level = static_cast<AlertLevel>(wire_level);
+        if (false && level == ALERT_LEVEL_WARNING)
           continue;  // FIXME: what to do about warnings?
         uint8_t alert_type;
         in.Read(&alert_type, 1);
-      *used = buf.TellBytes();
+        *used = buf.TellBytes();
         return AlertTypeToResult(static_cast<AlertType>(alert_type));
       }
       case RECORD_CHANGE_CIPHER_SPEC:
@@ -373,6 +377,10 @@ Result Connection::SetResumptionData(const uint8_t* data, size_t len) {
 
 bool Connection::did_resume() const {
   return priv_->did_resume;
+}
+
+void Connection::EnableFalseStart() {
+  priv_->false_start = true;
 }
 
 }  // namespace tlsclient
