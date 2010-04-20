@@ -47,8 +47,11 @@ struct ConnectionPrivate {
         server_supports_snap_start(false),
         snap_start_data_available(false),
         snap_start_attempt(false),
-        snap_start_handshake_hash(NULL),
-        predicted_server_cert(NULL) {
+        predicted_server_cert(NULL),
+        snap_start_recovery(false),
+        recording_application_data(false) {
+    sent_client_hello.iov_base = 0;
+    sent_client_key_exchange.iov_base = 0;
   }
 
   ~ConnectionPrivate();
@@ -67,7 +70,8 @@ struct ConnectionPrivate {
   // finished with the last buffer and so we can free it. This buffer is
   // allocated via |arena|.
   uint8_t* last_buffer;
-  size_t last_buffer_len;
+  struct iovec sent_client_hello;
+  struct iovec sent_client_key_exchange;
   // This is true if we have established a common TLS version in |version|
   bool version_established;
   TLSVersion version;
@@ -104,6 +108,7 @@ struct ConnectionPrivate {
   // chain)
   Certificate* server_cert;
   uint8_t master_secret[48];
+  uint8_t premaster_secret[48];
   HandshakeHash* handshake_hash;
   // A NULL pointer for either of these means the NULL cipher spec.
   CipherSpec* read_cipher_spec;
@@ -142,8 +147,10 @@ struct ConnectionPrivate {
   bool snap_start_attempt;
   TLSVersion predicted_server_version;
   struct iovec predicted_response;
-  HandshakeHash* snap_start_handshake_hash;
   Certificate* predicted_server_cert;
+  bool snap_start_recovery;
+  bool recording_application_data;
+  std::vector<struct iovec> recorded_application_data;
 };
 
 }  // namespace tlsclient

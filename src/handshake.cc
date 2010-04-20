@@ -17,6 +17,8 @@
 #include "tlsclient/src/sink.h"
 #include "tlsclient/src/crypto/cipher_suites.h"
 
+#include <stdio.h>
+
 namespace tlsclient {
 
 // RFC 5746, section 3.3
@@ -323,7 +325,15 @@ Result MarshalClientHello(Sink* sink, ConnectionPrivate* priv) {
   return 0;
 }
 
-static Result SetupCiperSpec(ConnectionPrivate* priv) {
+Result GenerateMasterSecret(ConnectionPrivate* priv) {
+  if (!MasterSecretFromPreMasterSecret(priv->master_secret, priv->version, priv->premaster_secret, sizeof(priv->premaster_secret), priv->client_random, priv->server_random))
+    return ERROR_RESULT(ERR_INTERNAL_ERROR);
+
+  priv->resumption_data_ready = true;
+  return 0;
+}
+
+Result SetupCiperSpec(ConnectionPrivate* priv) {
   KeyBlock kb;
   kb.key_len = priv->cipher_suite->key_len;
   kb.mac_len = priv->cipher_suite->mac_len;
@@ -346,13 +356,12 @@ Result MarshalClientKeyExchange(Sink* sink, ConnectionPrivate* priv) {
   if (!priv->cipher_suite || (priv->cipher_suite->flags & CIPHERSUITE_RSA) == 0)
     return ERROR_RESULT(ERR_INTERNAL_ERROR);
 
-  uint8_t premaster_secret[48];
   const uint16_t offered_version = TLSVersionToOffer(priv);
-  premaster_secret[0] = offered_version >> 8;
-  premaster_secret[1] = offered_version;
+  priv->premaster_secret[0] = offered_version >> 8;
+  priv->premaster_secret[1] = offered_version;
   const bool is_sslv3 = priv->version == SSLv3;
 
-  if (!priv->ctx->RandomBytes(&premaster_secret[2], sizeof(premaster_secret) - 2))
+  if (!priv->ctx->RandomBytes(&priv->premaster_secret[2], sizeof(priv->premaster_secret) - 2))
     return ERROR_RESULT(ERR_RANDOM_BYTES_FAILED);
 
   const size_t encrypted_premaster_size = priv->server_cert->SizeEncryptPKCS1();
@@ -362,15 +371,10 @@ Result MarshalClientKeyExchange(Sink* sink, ConnectionPrivate* priv) {
   // SSLv3 doesn't prefix the encrypted premaster secret with length bytes.
   Sink s(sink->VariableLengthBlock(is_sslv3 ? 0 : 2));
   uint8_t* encrypted_premaster_secret = s.Block(encrypted_premaster_size);
-  if (!priv->server_cert->EncryptPKCS1(encrypted_premaster_secret, premaster_secret, sizeof(premaster_secret)))
+  if (!priv->server_cert->EncryptPKCS1(encrypted_premaster_secret, priv->premaster_secret, sizeof(priv->premaster_secret)))
     return ERROR_RESULT(ERR_ENCRYPT_PKCS1_FAILED);
 
-  if (!MasterSecretFromPreMasterSecret(priv->master_secret, priv->version, premaster_secret, sizeof(premaster_secret), priv->client_random, priv->server_random))
-    return ERROR_RESULT(ERR_INTERNAL_ERROR);
-
-  priv->resumption_data_ready = true;
-
-  return SetupCiperSpec(priv);
+  return 0;
 }
 
 Result MarshalFinished(Sink* sink, ConnectionPrivate* priv) {
@@ -397,6 +401,7 @@ static const HandshakeMessage kPermittedHandshakeMessagesPerState[][2] = {
   /* RECV_SNAP_START_SERVER_HELLO */ { SERVER_HELLO, INVALID_MESSAGE },
   /* RECV_SNAP_START_SERVER_CERTIFICATE */ { CERTIFICATE, INVALID_MESSAGE },
   /* RECV_SNAP_START_SERVER_HELLO_DONE */ { SERVER_HELLO_DONE, INVALID_MESSAGE },
+  /* SEND_SNAP_START_RECOVERY */ { INVALID_MESSAGE },
 };
 
 static void AddHandshakeMessageToVerifyHash(HandshakeHash* handshake_hash, HandshakeMessage type, Buffer* in) {
@@ -461,11 +466,6 @@ Result ProcessHandshakeMessage(ConnectionPrivate* priv, HandshakeMessage type, B
 Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
   bool ok;
 
-  if (priv->state == RECV_SNAP_START_SERVER_HELLO) {
-    priv->state = RECV_SNAP_START_SERVER_CERTIFICATE;
-    return 0;
-  }
-
   const Buffer::Pos start_of_server_hello = in->Tell();
 
   uint16_t server_wire_version;
@@ -477,8 +477,24 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
   if (priv->version_established && priv->version != version)
     return ERROR_RESULT(ERR_INVALID_HANDSHAKE_MESSAGE);
 
-  if (!in->Read(&priv->server_random, sizeof(priv->server_random)))
+  uint8_t server_random[sizeof(priv->server_random)];
+  if (!in->Read(server_random, sizeof(server_random)))
     return ERROR_RESULT(ERR_INVALID_HANDSHAKE_MESSAGE);
+
+  if (priv->state == RECV_SNAP_START_SERVER_HELLO) {
+    if (memcmp(priv->server_random, server_random, sizeof(priv->server_random)) == 0) {
+      // Snap start accepted.
+      priv->recording_application_data = false;
+      priv->state = RECV_SNAP_START_SERVER_CERTIFICATE;
+      return 0;
+    }
+
+    // The server didn't accept our suggested server random which means that
+    // we need to perform snap start recovery.
+    priv->snap_start_recovery = true;
+    printf("tc: entering recovery\n");
+  }
+  memcpy(priv->server_random, server_random, sizeof(priv->server_random));
 
   Buffer session_id_buf(in->VariableLength(&ok, 1));
   if (!ok)
@@ -532,20 +548,18 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
   if (compression_method)
     return ERROR_RESULT(ERR_UNSUPPORTED_COMPRESSION_METHOD);
 
+  delete priv->handshake_hash;
   priv->handshake_hash = HandshakeHashForVersion(version);
   if (!priv->handshake_hash)
     return ERROR_RESULT(ERR_INTERNAL_ERROR);
 
   // We didn't know, until now, which TLS version to use. That meant that we
   // didn't know which hash to use for the ClientHello. However, the
-  // ClientHello is still hanging around in priv->last_buffer so we can add it,
+  // ClientHello is still hanging around sent_client_hello so we can add it,
   // and this message, now.
 
-  if (priv->last_buffer) {
-    // The handshake hash doesn't include the record header, so we skip the first
-    // five bytes.
-    priv->handshake_hash->Update(priv->last_buffer + 5, priv->last_buffer_len - 5);
-  }
+  if (priv->sent_client_hello.iov_base)
+    priv->handshake_hash->Update(priv->sent_client_hello.iov_base, priv->sent_client_hello.iov_len);
   AddHandshakeMessageToVerifyHash(priv->handshake_hash, SERVER_HELLO, in);
 
   if (resumption) {
@@ -638,6 +652,8 @@ Result ProcessServerHelloDone(ConnectionPrivate* priv, Buffer* in) {
 
   if (priv->state == RECV_SNAP_START_SERVER_HELLO_DONE) {
     priv->state = RECV_CHANGE_CIPHER_SPEC;
+  } else if (priv->snap_start_recovery) {
+    priv->state = SEND_SNAP_START_RECOVERY;
   } else {
     priv->state = SEND_PHASE_TWO;
   }

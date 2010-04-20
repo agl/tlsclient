@@ -27,12 +27,15 @@ main(int argc, char **argv) {
   OpenSSL_add_all_algorithms();
   SSL_load_error_strings();
 
-  bool sni = false, sni_good = false, snap_start = false;
+  bool sni = false, sni_good = false, snap_start = false, snap_start_recovery;
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "sni") == 0) {
       sni = true;
     } else if (strcmp(argv[i], "snap-start") == 0) {
       snap_start = true;
+    } else if (strcmp(argv[i], "snap-start-recovery") == 0) {
+      snap_start = true;
+      snap_start_recovery = true;
     } else {
       fprintf(stderr, "Unknown argument: %s\n", argv[i]);
       return 1;
@@ -104,6 +107,10 @@ main(int argc, char **argv) {
         err = SSL_get_error(server, ret);
         if (err == SSL_ERROR_WANT_READ)
           continue;
+        if (err == SSL_ERROR_SERVER_RANDOM_VALIDATION_PENDING && snap_start) {
+          SSL_set_suggested_server_random_validity(server, !snap_start_recovery);
+          continue;
+        }
         ERR_print_errors_fp(stderr);
         fprintf(stderr, "SSL_accept failed: %d\n", err);
         return 1;

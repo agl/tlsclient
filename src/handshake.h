@@ -27,6 +27,7 @@ enum HandshakeState {
   RECV_SNAP_START_SERVER_HELLO,
   RECV_SNAP_START_SERVER_CERTIFICATE,
   RECV_SNAP_START_SERVER_HELLO_DONE,
+  SEND_SNAP_START_RECOVERY,
   // Changing something here? Don't forget to update
   // kPermittedHandshakeMessagesPerState!
 };
@@ -128,6 +129,8 @@ Result ProcessHandshakeMessage(ConnectionPrivate* priv, HandshakeMessage type, B
 Result ProcessServerCertificate(ConnectionPrivate* priv, Buffer* in);
 Result ProcessServerHelloDone(ConnectionPrivate* priv, Buffer* in);
 Result ProcessServerFinished(ConnectionPrivate* priv, Buffer* in);
+Result GenerateMasterSecret(ConnectionPrivate* priv);
+Result SetupCiperSpec(ConnectionPrivate* priv);
 
 }  // namespace tlsclient
 

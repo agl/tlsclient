@@ -4,6 +4,8 @@
 
 #include "tlsclient/src/crypto/fnv1a64/fnv1a64.h"
 
+#include <stdio.h>
+
 // This is an implementation of the FNV-1a hash as described at
 // http://isthe.com/chongo/tech/comp/fnv/
 
@@ -17,8 +19,22 @@ void FNV1a64::Init() {
   s_ = kOffsetBasis;
 }
 
+static void hexdump(const void* a, unsigned len) {
+	const unsigned char* in = (const unsigned char *) a;
+	unsigned i;
+
+	for (i = 0; i < len; i++) {
+		printf("%x", in[i] >> 4);
+		printf("%x", in[i] & 15);
+	}
+	printf("\n");
+}
+
 void FNV1a64::Update(const void* data, size_t length) {
   const uint8_t* d = reinterpret_cast<const uint8_t*>(data);
+
+  printf("tc: ");
+  hexdump(data, length);
 
   for (size_t i = 0; i < length; i++) {
     s_ ^= d[i];

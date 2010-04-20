@@ -22,7 +22,6 @@ ConnectionPrivate::~ConnectionPrivate() {
   delete server_cert;
   memset(master_secret, 0, sizeof(master_secret));
   delete handshake_hash;
-  delete snap_start_handshake_hash;
   delete predicted_server_cert;
 
   if (read_cipher_spec)
@@ -52,6 +51,7 @@ bool Connection::need_to_write() const {
   case SEND_PHASE_ONE:
   case SEND_PHASE_TWO:
   case SEND_RESUME_PHASE_ONE:
+  case SEND_SNAP_START_RECOVERY:
     return true;
   default:
     return false;
@@ -120,12 +120,16 @@ Result Connection::Get(struct iovec* out) {
       // point because we don't know which hash function we'll be using until
       // we get the ServerHello.
     }
+
+    priv_->sent_client_hello.iov_len = s.size();
+    priv_->sent_client_hello.iov_base = priv_->arena.Allocate(priv_->sent_client_hello.iov_len);
+    memcpy(priv_->sent_client_hello.iov_base, s.data(), priv_->sent_client_hello.iov_len);
+
     if (priv_->snap_start_attempt) {
       priv_->handshake_hash = HandshakeHashForVersion(priv_->predicted_server_version);
       if (!priv_->handshake_hash)
         return ERROR_RESULT(ERR_INTERNAL_ERROR);
       priv_->handshake_hash->Update(s.data(), s.size());
-      hexdump(s.data(), s.size());
       priv_->handshake_hash->Update(priv_->predicted_response.iov_base, priv_->predicted_response.iov_len);
       hexdump(priv_->predicted_response.iov_base, priv_->predicted_response.iov_len);
       priv_->state = SEND_PHASE_TWO;
@@ -136,26 +140,47 @@ Result Connection::Get(struct iovec* out) {
     }
   }
 
-  if (priv_->state == SEND_PHASE_TWO ||
-      priv_->state == SEND_RESUME_PHASE_ONE) {
-    Result r;
-    if (priv_->state == SEND_PHASE_TWO) {
-      Sink s(sink.Record(priv_->version, RECORD_HANDSHAKE));
-      {
-        Sink ss(sink.HandshakeMessage(CLIENT_KEY_EXCHANGE));
-        if ((r = MarshalClientKeyExchange(&ss, priv_)))
-          return r;
-      }
-      priv_->handshake_hash->Update(s.data(), s.size());
-      if ((r = EncryptRecord(priv_, &s)))
+  if (priv_->state == SEND_PHASE_TWO) {
+    Sink s(sink.Record(priv_->version, RECORD_HANDSHAKE));
+    {
+      Sink ss(sink.HandshakeMessage(CLIENT_KEY_EXCHANGE));
+      if ((r = MarshalClientKeyExchange(&ss, priv_)))
         return r;
     }
+
+    priv_->sent_client_key_exchange.iov_len = s.size();
+    priv_->sent_client_key_exchange.iov_base = priv_->arena.Allocate(priv_->sent_client_key_exchange.iov_len);
+    memcpy(priv_->sent_client_key_exchange.iov_base, s.data(), priv_->sent_client_key_exchange.iov_len);
+
+    priv_->handshake_hash->Update(s.data(), s.size());
+    if ((r = EncryptRecord(priv_, &s)))
+      return r;
+  }
+
+  if (priv_->state == SEND_SNAP_START_RECOVERY) {
+      priv_->handshake_hash->Update(priv_->sent_client_key_exchange.iov_base, priv_->sent_client_key_exchange.iov_len);
+  }
+
+  if (priv_->state == SEND_PHASE_TWO ||
+      priv_->state == SEND_SNAP_START_RECOVERY) {
+    r = GenerateMasterSecret(priv_);
+    if (r)
+      return r;
+    r = SetupCiperSpec(priv_);
+    if (r)
+      return r;
+  }
+
+  if (priv_->state == SEND_PHASE_TWO ||
+      priv_->state == SEND_RESUME_PHASE_ONE ||
+      priv_->state == SEND_SNAP_START_RECOVERY) {
     {
       Sink s(sink.Record(priv_->version, RECORD_CHANGE_CIPHER_SPEC));
       s.U8(1);
       if ((r = EncryptRecord(priv_, &s)))
         return r;
     }
+
     if (priv_->write_cipher_spec)
       priv_->write_cipher_spec->DecRef();
     priv_->write_cipher_spec = priv_->pending_write_cipher_spec;
@@ -173,20 +198,54 @@ Result Connection::Get(struct iovec* out) {
         return r;
     }
 
-    if (priv_->false_start || priv_->snap_start_attempt)
+    if (priv_->false_start || priv_->snap_start_attempt) {
       priv_->can_send_application_data = true;
+      priv_->recording_application_data = true;
+    }
 
-    if (priv_->snap_start_attempt) {
-      priv_->state = RECV_SNAP_START_SERVER_HELLO;
-    } else if (priv_->state == SEND_PHASE_TWO) {
-      priv_->state = RECV_CHANGE_CIPHER_SPEC;
-    } else {
-      priv_->state = AWAIT_HELLO_REQUEST;
+    switch (priv_->state) {
+      case SEND_PHASE_TWO:
+        if (priv_->snap_start_attempt) {
+          priv_->state = RECV_SNAP_START_SERVER_HELLO;
+        } else {
+          priv_->state = RECV_CHANGE_CIPHER_SPEC;
+        }
+        break;
+      case SEND_RESUME_PHASE_ONE:
+        priv_->state = AWAIT_HELLO_REQUEST;
+        break;
+      case SEND_SNAP_START_RECOVERY:
+        break;
+      default:
+        return ERROR_RESULT(ERR_INTERNAL_ERROR);
     }
   }
 
+  if (priv_->state == SEND_SNAP_START_RECOVERY) {
+    // Need to retransmit previously sent application data.
+    priv_->recording_application_data = false;
+
+    for (std::vector<struct iovec>::const_iterator i = priv_->recorded_application_data.begin(); i != priv_->recorded_application_data.end(); i++) {
+      struct iovec start, end;
+      Encrypt(&start, &end, &(*i), 1);
+      uint8_t* a = sink.Block(start.iov_len);
+      memcpy(a, start.iov_base, start.iov_len);
+      uint8_t* b = sink.Block(i->iov_len);
+      memcpy(b, i->iov_base, i->iov_len);
+      uint8_t* c = sink.Block(end.iov_len);
+      memcpy(c, end.iov_base, end.iov_len);
+      priv_->arena.Free(i->iov_base);
+    }
+    priv_->recorded_application_data.clear();
+
+    priv_->state = RECV_CHANGE_CIPHER_SPEC;
+    priv_->snap_start_attempt = false;
+  }
+
+  if (sink.size() == 0)
+    return ERROR_RESULT(ERR_INTERNAL_ERROR);
+
   priv_->last_buffer = sink.Release();
-  priv_->last_buffer_len = sink.size();
   out->iov_len = sink.size();
   out->iov_base = priv_->last_buffer;
   return 0;
@@ -227,6 +286,14 @@ Result Connection::Encrypt(struct iovec* start, struct iovec* end, const struct 
 
   if (len > 16384)
     return ERROR_RESULT(ERR_ENCRYPT_RECORD_TOO_LONG);
+
+  if (priv_->recording_application_data) {
+    uint8_t* data = static_cast<uint8_t*>(priv_->arena.Allocate(len));
+    if (!buf.Read(data, len))
+      return ERROR_RESULT(ERR_INTERNAL_ERROR);
+    const struct iovec iov = {data, len};
+    priv_->recorded_application_data.push_back(iov);
+  }
 
   // We need an extra element at the end of the array so we have to make a
   // copy.
