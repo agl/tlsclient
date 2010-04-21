@@ -8,6 +8,7 @@
 #include "tlsclient/src/crypto/prf/hmac.h"
 #include "tlsclient/src/crypto/prf/prf.h"
 #include "tlsclient/src/crypto/rc4/rc4.h"
+#include "tlsclient/src/crypto/md5/md5.h"
 #include "tlsclient/src/crypto/sha1/sha1.h"
 
 #if 0
@@ -102,7 +103,7 @@ class MAC<H, TLSv10> {
     uint8_t seq[8];
     MarshalSeqNum(seq, seq_num);
 
-    HMAC<SHA1> mac(mac_secret, H::DIGEST_SIZE);
+    HMAC<H> mac(mac_secret, H::DIGEST_SIZE);
     mac.Update(seq, sizeof(seq));
     mac.Update(record_header, 5);
     for (unsigned i = 0; i < in_len; i++)
@@ -180,17 +181,20 @@ class StreamCipherSpec : public CipherSpec {
   uint8_t mac_write_[H::DIGEST_SIZE];
 };
 
-CipherSpec* CreateRC4_SHA(TLSVersion version, const KeyBlock& kb) {
+template<class Cipher, class Hash>
+CipherSpec* CreateStreamCipher(TLSVersion version, const KeyBlock& kb) {
   if (version == SSLv3) {
-    return new StreamCipherSpec<RC4, SHA1, SSLv3>(kb);
+    return new StreamCipherSpec<Cipher, Hash, SSLv3>(kb);
   } else {
-    return new StreamCipherSpec<RC4, SHA1, TLSv10>(kb);
+    return new StreamCipherSpec<Cipher, Hash, TLSv10>(kb);
   }
 }
 
 static const CipherSuite kCipherSuites[] = {
   { CIPHERSUITE_RSA | CIPHERSUITE_RC4 | CIPHERSUITE_SHA,
-    0x0005, "TLS_RSA_WITH_RC4_128_SHA", 16, 20, 0, CreateRC4_SHA},
+    0x0005, "TLS_RSA_WITH_RC4_128_SHA", 16, 20, 0, CreateStreamCipher<RC4, SHA1>},
+  { CIPHERSUITE_RSA | CIPHERSUITE_RC4 | CIPHERSUITE_MD5,
+    0x0004, "TLS_RSA_WITH_RC4_128_MD5", 16, 16, 0, CreateStreamCipher<RC4, MD5>},
   { 0, 0, "", 0, 0, 0, NULL },
 };
 

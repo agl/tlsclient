@@ -17,8 +17,6 @@
 #include "tlsclient/src/sink.h"
 #include "tlsclient/src/crypto/cipher_suites.h"
 
-#include <stdio.h>
-
 namespace tlsclient {
 
 // RFC 5746, section 3.3
@@ -492,7 +490,6 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
     // The server didn't accept our suggested server random which means that
     // we need to perform snap start recovery.
     priv->snap_start_recovery = true;
-    printf("tc: entering recovery\n");
   }
   memcpy(priv->server_random, server_random, sizeof(priv->server_random));
 

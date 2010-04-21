@@ -13,6 +13,7 @@ enum {
   CIPHERSUITE_RSA = 1 << 0,
   CIPHERSUITE_RC4 = 1 << 1,
   CIPHERSUITE_SHA = 1 << 2,
+  CIPHERSUITE_MD5 = 1 << 3,
 };
 
 class CipherSpec {

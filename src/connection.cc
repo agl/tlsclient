@@ -14,7 +14,19 @@
 #include "tlsclient/src/handshake.h"
 #include "tlsclient/src/sink.h"
 
+#if 0
 #include <stdio.h>
+static void hexdump(const void* data, size_t length) {
+  const uint8_t* in = static_cast<const uint8_t*>(data);
+
+  for (size_t i = 0; i < length; i++) {
+    printf("%x", in[i] >> 4);
+    printf("%x", in[i] & 15);
+  }
+
+  printf("\n");
+}
+#endif
 
 namespace tlsclient {
 
@@ -40,6 +52,10 @@ Connection::Connection(Context* ctx)
 
 Connection::~Connection() {
   delete priv_;
+}
+
+void Connection::set_sslv3(bool use_sslv3) {
+  priv_->sslv3 = use_sslv3;
 }
 
 void Connection::set_host_name(const char* name) {
@@ -86,17 +102,6 @@ static Result EncryptRecord(ConnectionPrivate* priv, Sink* sink) {
   return 0;
 }
 
-static void hexdump(const void* data, size_t length) {
-  const uint8_t* in = static_cast<const uint8_t*>(data);
-
-  for (size_t i = 0; i < length; i++) {
-    printf("%x", in[i] >> 4);
-    printf("%x", in[i] & 15);
-  }
-
-  printf("\n");
-}
-
 Result Connection::Get(struct iovec* out) {
   Result r;
 
@@ -131,7 +136,6 @@ Result Connection::Get(struct iovec* out) {
         return ERROR_RESULT(ERR_INTERNAL_ERROR);
       priv_->handshake_hash->Update(s.data(), s.size());
       priv_->handshake_hash->Update(priv_->predicted_response.iov_base, priv_->predicted_response.iov_len);
-      hexdump(priv_->predicted_response.iov_base, priv_->predicted_response.iov_len);
       priv_->state = SEND_PHASE_TWO;
     } else {
       if ((r = EncryptRecord(priv_, &s)))
