@@ -27,7 +27,7 @@ main(int argc, char **argv) {
   OpenSSL_add_all_algorithms();
   SSL_load_error_strings();
 
-  bool sni = false, sni_good = false, snap_start = false, snap_start_recovery;
+  bool sni = false, sni_good = false, snap_start = false, snap_start_recovery = false, sslv3 = false;
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "sni") == 0) {
       sni = true;
@@ -36,13 +36,21 @@ main(int argc, char **argv) {
     } else if (strcmp(argv[i], "snap-start-recovery") == 0) {
       snap_start = true;
       snap_start_recovery = true;
+    } else if (strcmp(argv[i], "sslv3") == 0) {
+      sslv3 = true;
     } else {
       fprintf(stderr, "Unknown argument: %s\n", argv[i]);
       return 1;
     }
   }
 
-  SSL_CTX* ctx = SSL_CTX_new(TLSv1_server_method());
+  SSL_CTX* ctx;
+
+  if (sslv3) {
+    ctx = SSL_CTX_new(SSLv3_server_method());
+  } else {
+    ctx = SSL_CTX_new(TLSv1_server_method());
+  }
 
   if (sni) {
     SSL_CTX_set_tlsext_servername_callback(ctx, sni_cb);

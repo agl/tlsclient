@@ -10,9 +10,8 @@
 #include "tlsclient/src/crypto/rc4/rc4.h"
 #include "tlsclient/src/crypto/sha1/sha1.h"
 
-namespace tlsclient {
-
 #if 0
+#include <stdio.h>
 static void hexdump(const void* in, size_t length) {
   const uint8_t* const a = reinterpret_cast<const uint8_t*>(in);
 
@@ -23,6 +22,8 @@ static void hexdump(const void* in, size_t length) {
   printf("\n");
 }
 #endif
+
+namespace tlsclient {
 
 static void MarshalSeqNum(uint8_t* seq, uint64_t seq_num) {
   seq[0] = seq_num >> 56;
@@ -35,54 +36,121 @@ static void MarshalSeqNum(uint8_t* seq, uint64_t seq_num) {
   seq[7] = seq_num;
 }
 
-class RC4_SHA : public CipherSpec {
+const uint8_t kSSLv3Pad1[48] =
+  { 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36,
+    0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36,
+    0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36,
+    0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36,
+    0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36,
+    0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36 };
+
+const uint8_t kSSLv3Pad2[48] =
+  { 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c,
+    0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c,
+    0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c,
+    0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c,
+    0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c,
+    0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c };
+
+template<class H, enum TLSVersion>
+class MAC { };
+
+// MAC<SSLv3> implements the SSLv3 MAC function, as defined in
+// www.mozilla.org/projects/security/pki/nss/ssl/draft302.txt section 5.2.3.1
+template<class H>
+class MAC<H, SSLv3> {
  public:
-  RC4_SHA(const KeyBlock& kb)
-      : rc4_read_(kb.server_key, kb.key_len),
-        rc4_write_(kb.client_key, kb.key_len) {
+  enum {
+    MAC_SIZE = H::DIGEST_SIZE,
+  };
+
+  static void Do(uint8_t* out, const uint8_t* record_header, struct iovec* in, unsigned in_len, uint64_t seq_num, const uint8_t* mac_secret) {
+    H hash;
+    const unsigned pad_length = H::DIGEST_SIZE == 20 ? 40 : 48;
+
+    hash.Update(mac_secret, H::DIGEST_SIZE);
+    hash.Update(kSSLv3Pad1, pad_length);
+
+    uint8_t seq[8];
+    MarshalSeqNum(seq, seq_num);
+    hash.Update(seq, sizeof(seq));
+
+    hash.Update(record_header, 1);
+    hash.Update(record_header + 3, 2);
+    for (unsigned i = 0; i < in_len; i++)
+      hash.Update(in[i].iov_base, in[i].iov_len);
+    hash.Final(out);
+
+    hash.Init();
+    hash.Update(mac_secret, H::DIGEST_SIZE);
+    hash.Update(kSSLv3Pad2, pad_length);
+    hash.Update(out, H::DIGEST_SIZE);
+    hash.Final(out);
+  }
+};
+
+// MAC<TLSv10> implements the TLSv10 MAC function, as defined in RFC 2246
+// section 6.3.2.1
+template<class H>
+class MAC<H, TLSv10> {
+ public:
+  enum {
+    MAC_SIZE = HMAC<H>::DIGEST_SIZE,
+  };
+
+  static void Do(uint8_t* out, const uint8_t* record_header, struct iovec* in, unsigned in_len, uint64_t seq_num, const uint8_t* mac_secret) {
+    uint8_t seq[8];
+    MarshalSeqNum(seq, seq_num);
+
+    HMAC<SHA1> mac(mac_secret, H::DIGEST_SIZE);
+    mac.Update(seq, sizeof(seq));
+    mac.Update(record_header, 5);
+    for (unsigned i = 0; i < in_len; i++)
+      mac.Update(in[i].iov_base, in[i].iov_len);
+    mac.Final(out);
+  }
+};
+
+template<class Cipher, class H, enum TLSVersion V>
+class StreamCipherSpec : public CipherSpec {
+ public:
+  typedef MAC<H, V> M;
+
+  StreamCipherSpec(const KeyBlock& kb)
+      : read_(kb.server_key, kb.key_len),
+        write_(kb.client_key, kb.key_len) {
     memcpy(mac_read_, kb.server_mac, sizeof(mac_read_));
     memcpy(mac_write_, kb.client_mac, sizeof(mac_write_));
   }
 
   virtual unsigned ScratchBytesNeeded(size_t length) {
-    return HMAC<SHA1>::DIGEST_SIZE;
+    return M::MAC_SIZE;
   }
 
   virtual bool Encrypt(uint8_t* scratch, size_t* scratch_size, const uint8_t* record_header, struct iovec* in, unsigned in_len, uint64_t seq_num) {
-    if (*scratch_size < HMAC<SHA1>::DIGEST_SIZE)
+    if (*scratch_size < M::MAC_SIZE)
       return false;
 
-    uint8_t seq[8];
-    MarshalSeqNum(seq, seq_num);
-
-    HMAC<SHA1> mac(mac_write_, sizeof(mac_write_));
-    mac.Update(seq, sizeof(seq));
-    mac.Update(record_header, 5);
-    for (unsigned i = 0; i < in_len; i++) {
-      mac.Update(in[i].iov_base, in[i].iov_len);
-    }
-    mac.Final(scratch);
-    *scratch_size = HMAC<SHA1>::DIGEST_SIZE;
+    M::Do(scratch, record_header, in, in_len, seq_num, mac_write_);
+    *scratch_size = M::MAC_SIZE;
 
     in[in_len].iov_base = scratch;
-    in[in_len].iov_len = HMAC<SHA1>::DIGEST_SIZE;
-    rc4_write_.Encrypt(in, in_len + 1);
+    in[in_len].iov_len = M::MAC_SIZE;
+    write_.Encrypt(in, in_len + 1);
     return true;
   }
 
   virtual bool Decrypt(unsigned* bytes_stripped, struct iovec* iov, unsigned* iov_len, const uint8_t* record_header, uint64_t seq_num) {
-    uint8_t seq[8];
-    uint8_t scratch1[HMAC<SHA1>::DIGEST_SIZE];
-    uint8_t scratch2[HMAC<SHA1>::DIGEST_SIZE];
-    MarshalSeqNum(seq, seq_num);
+    uint8_t scratch1[M::MAC_SIZE];
+    uint8_t scratch2[M::MAC_SIZE];
 
-    rc4_read_.Decrypt(iov, *iov_len);
+    read_.Decrypt(iov, *iov_len);
 
     Buffer buf(iov, *iov_len);
     const size_t len = buf.size();
-    if (len < HMAC<SHA1>::DIGEST_SIZE)
+    if (len < M::MAC_SIZE)
       return false;
-    buf.Advance(len - HMAC<SHA1>::DIGEST_SIZE);
+    buf.Advance(len - M::MAC_SIZE);
     if (!buf.Read(scratch2, sizeof(scratch2)))
       return false;
 
@@ -90,35 +158,34 @@ class RC4_SHA : public CipherSpec {
     memcpy(record_header_copy, record_header, 5);
     uint16_t record_length = static_cast<uint16_t>(record_header[3]) << 8 |
                              record_header[4];
-    record_length -= HMAC<SHA1>::DIGEST_SIZE;
+    record_length -= M::MAC_SIZE;
     record_header_copy[3] = record_length >> 8;
     record_header_copy[4] = record_length;
 
-    Buffer::RemoveTrailingBytes(iov, iov_len, HMAC<SHA1>::DIGEST_SIZE);
+    Buffer::RemoveTrailingBytes(iov, iov_len, M::MAC_SIZE);
 
-    HMAC<SHA1> mac(mac_read_, sizeof(mac_read_));
-    mac.Update(seq, sizeof(seq));
-    mac.Update(record_header_copy, 5);
-    for (unsigned i = 0; i < *iov_len; i++)
-      mac.Update(iov[i].iov_base, iov[i].iov_len);
-    mac.Final(scratch1);
-
+    M::Do(scratch1, record_header_copy, iov, *iov_len, seq_num, mac_read_);
     return CompareBytes(scratch1, scratch2, sizeof(scratch1));
   }
 
   virtual unsigned StripMACAndPadding(struct iovec* iov, unsigned* iov_len) {
-    return 0;
+    Buffer::RemoveTrailingBytes(iov, iov_len, M::MAC_SIZE);
+    return M::MAC_SIZE;
   }
 
  private:
-  RC4 rc4_read_;
-  RC4 rc4_write_;
-  uint8_t mac_read_[20];
-  uint8_t mac_write_[20];
+  Cipher read_;
+  Cipher write_;
+  uint8_t mac_read_[H::DIGEST_SIZE];
+  uint8_t mac_write_[H::DIGEST_SIZE];
 };
 
-CipherSpec* CreateRC4_SHA(const KeyBlock& kb) {
-  return new RC4_SHA(kb);
+CipherSpec* CreateRC4_SHA(TLSVersion version, const KeyBlock& kb) {
+  if (version == SSLv3) {
+    return new StreamCipherSpec<RC4, SHA1, SSLv3>(kb);
+  } else {
+    return new StreamCipherSpec<RC4, SHA1, TLSv10>(kb);
+  }
 }
 
 static const CipherSuite kCipherSuites[] = {

@@ -152,7 +152,7 @@ class Connection {
   bool did_snap_start();
 
   // set_sslv3 sets whether we should use SSLv3 only. This should never need to
-  // be called except to work around buggy TLS server that are intollerant of
+  // be called except to work around buggy TLS server that are intolerant of
   // extensions.
   void set_sslv3(bool use_sslv3);
   // set_host_name sets the name which is given the server to aid in its

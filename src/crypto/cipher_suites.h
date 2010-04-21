@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "tlsclient/public/base.h"
+#include "tlsclient/src/handshake.h"
 
 namespace tlsclient {
 
@@ -59,7 +60,7 @@ struct CipherSuite {
   // create is a factory function to create a new CipherSpec for this cipher
   // suite and the given key material. The KeyBlock must already be filled out
   // with the correct amount of key material.
-  CipherSpec* (*create) (const KeyBlock&);
+  CipherSpec* (*create) (TLSVersion version, const KeyBlock&);
 };
 
 const CipherSuite *AllCipherSuites();

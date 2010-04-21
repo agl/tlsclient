@@ -346,7 +346,7 @@ Result SetupCiperSpec(ConnectionPrivate* priv) {
     priv->pending_read_cipher_spec->DecRef();
   if (priv->pending_write_cipher_spec)
     priv->pending_write_cipher_spec->DecRef();
-  priv->pending_read_cipher_spec = priv->pending_write_cipher_spec = priv->cipher_suite->create(kb);
+  priv->pending_read_cipher_spec = priv->pending_write_cipher_spec = priv->cipher_suite->create(priv->version, kb);
   priv->pending_write_cipher_spec->AddRef();
 
   return 0;
@@ -664,7 +664,7 @@ Result ProcessServerHelloDone(ConnectionPrivate* priv, Buffer* in) {
 Result ProcessServerFinished(ConnectionPrivate* priv, Buffer* in) {
   unsigned server_verify_len;
   const uint8_t* const server_verify = priv->handshake_hash->ServerVerifyData(&server_verify_len, priv->master_secret, sizeof(priv->master_secret));
-  uint8_t verify_data[32];
+  uint8_t verify_data[36];
 
   if (in->remaining() != server_verify_len)
     return ERROR_RESULT(ERR_BAD_VERIFY);

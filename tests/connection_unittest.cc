@@ -239,6 +239,16 @@ TEST_F(ConnectionTest, GnuTLSSimple) {
   PerformConnection(client_, &conn);
 }
 
+TEST_F(ConnectionTest, OpenSSLv3) {
+  static const char* const args[] = {kOpenSSLHelper, "sslv3", NULL};
+
+  OpenSSLContext ctx;
+  Connection conn(&ctx);
+  conn.EnableDefault();
+  StartServer(args);
+  PerformConnection(client_, &conn);
+}
+
 TEST_F(ConnectionTest, GnuTLSv12) {
   static const char* const args[] = {kGnuTLSHelper, "tls1.2", NULL};
 
