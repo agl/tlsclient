@@ -114,5 +114,25 @@
         '-lgcrypt',
       ],
     },
+
+    {
+      'target_name': 'tc-client',
+      'type': 'executable',
+      'sources': [
+        'util/tc_client.cc',
+        'tests/openssl-context.cc',
+      ],
+      'include_dirs': [
+        '..',
+        '/home/agl/devel/openssl-0.9.8m/include',
+      ],
+      'dependencies': [
+        'libtlsclient',
+      ],
+      'ldflags': [
+        '-L/home/agl/devel/openssl-0.9.8m',
+        '-lcrypto',
+      ],
+    },
   ],
 }

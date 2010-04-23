@@ -143,7 +143,7 @@ class Connection {
   //   out_iovs: (output) on return, points to an array of vectors. Each vector
   //     contains exactly one certificate.
   //   out_len: (output) on return, the number of elements in |out_iovs|.
-  Result server_certificates(struct iovec** out_iovs, unsigned** out_len);
+  Result server_certificates(const struct iovec** out_iovs, unsigned* out_len);
 
   void CollectSnapStartData();
   bool is_snap_start_data_available() const;

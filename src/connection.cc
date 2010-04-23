@@ -86,6 +86,12 @@ bool Connection::is_ready_to_send_application_data() const {
   return priv_->can_send_application_data;
 }
 
+Result Connection::server_certificates(const struct iovec** out_iovs, unsigned* out_len) {
+  *out_iovs = &priv_->server_certificates[0];
+  *out_len = priv_->server_certificates.size();
+  return 0;
+}
+
 static Result EncryptRecord(ConnectionPrivate* priv, Sink* sink) {
   if (!priv->write_cipher_spec)
     return 0;
@@ -336,6 +342,7 @@ Result Connection::Process(struct iovec** out, unsigned* out_n, size_t* used,
   *out = NULL;
   *out_n = 0;
   *used = 0;
+  priv_->out_vectors.clear();
 
   Buffer buf(iov, n);
   bool found;
@@ -348,8 +355,7 @@ Result Connection::Process(struct iovec** out, unsigned* out_n, size_t* used,
     if (need_to_write())
       return 0;
 
-    priv_->out_vectors.clear();
-
+    const size_t prev_num_out_vectors = priv_->out_vectors.size();
     Result r = GetRecordOrHandshake(&found, &type, &htype, &priv_->out_vectors, &buf, priv_);
     if (r)
       return r;
@@ -363,6 +369,12 @@ Result Connection::Process(struct iovec** out, unsigned* out_n, size_t* used,
       *out = &priv_->out_vectors[0];
       *out_n = priv_->out_vectors.size();
       *used = buf.TellBytes();
+      continue;
+    }
+
+    if (prev_num_out_vectors) {
+      // We had some amount of application data already and now we have another
+      // form of record. We'll return the application level data now.
       return 0;
     }
 
@@ -399,6 +411,8 @@ Result Connection::Process(struct iovec** out, unsigned* out_n, size_t* used,
       default:
         return ERROR_RESULT(ERR_INTERNAL_ERROR);
     }
+
+    priv_->out_vectors.clear();
   }
 }
 
