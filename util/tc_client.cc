@@ -280,6 +280,8 @@ main(int argc, char **argv) {
   Buffer q_in;
   Buffer q_out;
 
+  bool have_printed_cipher_suite = false;
+
   for (;;) {
     bool did_something = false;
 
@@ -302,6 +304,11 @@ main(int argc, char **argv) {
         return 1;
       if (q_out.size())
         ready_sock_out = false;
+    }
+
+    if (!have_printed_cipher_suite && conn.is_ready_to_send_application_data()) {
+      fprintf(stderr, " - using %s\n", conn.cipher_suite_name());
+      have_printed_cipher_suite = true;
     }
 
     if (!q_out.size() && conn.need_to_write() && ready_sock_out) {

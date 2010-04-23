@@ -145,6 +145,12 @@ class Connection {
   //   out_len: (output) on return, the number of elements in |out_iovs|.
   Result server_certificates(const struct iovec** out_iovs, unsigned* out_len);
 
+  // cipher_suite_name returns the textual name of the current cipher suite, as
+  // defined in the IANA registry of TLS cipher suites. This function can be
+  // called any time after is_ready_to_send_application_data returns true.
+  // Otherwise it will return NULL.
+  const char* cipher_suite_name() const;
+
   void CollectSnapStartData();
   bool is_snap_start_data_available() const;
   Result GetSnapStartData(struct iovec* iov);

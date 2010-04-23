@@ -92,6 +92,12 @@ Result Connection::server_certificates(const struct iovec** out_iovs, unsigned* 
   return 0;
 }
 
+const char* Connection::cipher_suite_name() const {
+  if (!priv_->cipher_suite)
+    return NULL;
+  return priv_->cipher_suite->name;
+}
+
 static Result EncryptRecord(ConnectionPrivate* priv, Sink* sink) {
   if (!priv->write_cipher_spec)
     return 0;
