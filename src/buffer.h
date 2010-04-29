@@ -84,7 +84,6 @@ class Buffer {
           pos_.i++;
           pos_.offset = 0;
         }
-        break;
       }
     }
 
@@ -147,7 +146,7 @@ class Buffer {
     const unsigned num_iovs = pos.i - pos_.i + 1;
     const size_t old_out_size = out->size();
     out->resize(old_out_size + num_iovs);
-    struct iovec *iovs = &(*out)[old_out_size];
+    struct iovec *iovs = &((*out)[old_out_size]);
     iovs[0].iov_base = static_cast<uint8_t*>(iov_[pos_.i].iov_base) + pos_.offset;
     if (pos.i == pos_.i) {
       iovs[0].iov_len = pos.offset - pos_.offset;
@@ -254,8 +253,8 @@ class Buffer {
     Advance(len);
     *ok = true;
     struct iovec *iovs_copy = new struct iovec[iovs.size()];
-    memcpy(&iovs_copy[0], &iovs[0], sizeof(struct iovec) * iovs.size());
-    return Buffer(&iovs_copy[0], iovs.size(), true);
+    memcpy(iovs_copy, &iovs[0], sizeof(struct iovec) * iovs.size());
+    return Buffer(iovs_copy, iovs.size(), true);
   }
 
   const struct iovec* iovec() const {
