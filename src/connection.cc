@@ -630,4 +630,8 @@ Result Connection::SetSnapStartData(const uint8_t* data, size_t len) {
   return 0;
 }
 
+bool Connection::did_snap_start() const {
+  return priv_->did_snap_start;
+}
+
 }  // namespace tlsclient

@@ -49,7 +49,8 @@ struct ConnectionPrivate {
         snap_start_attempt(false),
         predicted_server_cert(NULL),
         snap_start_recovery(false),
-        recording_application_data(false) {
+        recording_application_data(false),
+        did_snap_start(false) {
     sent_client_hello.iov_base = 0;
     sent_client_key_exchange.iov_base = 0;
   }
@@ -151,6 +152,7 @@ struct ConnectionPrivate {
   bool snap_start_recovery;
   bool recording_application_data;
   std::vector<struct iovec> recorded_application_data;
+  bool did_snap_start;
 };
 
 }  // namespace tlsclient

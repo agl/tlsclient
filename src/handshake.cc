@@ -648,6 +648,7 @@ Result ProcessServerHelloDone(ConnectionPrivate* priv, Buffer* in) {
     priv->snap_start_data_available = true;
 
   if (priv->state == RECV_SNAP_START_SERVER_HELLO_DONE) {
+    priv->did_snap_start = true;
     priv->state = RECV_CHANGE_CIPHER_SPEC;
   } else if (priv->snap_start_recovery) {
     priv->state = SEND_SNAP_START_RECOVERY;
