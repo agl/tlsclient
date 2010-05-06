@@ -163,9 +163,10 @@ static void PerformConnection(const int fd, Connection* conn) {
       }
     }
 
-    buffer_length++;
+    /*buffer_length++;
     if (buffer_length == 6)
-      buffer_length = 1;
+      buffer_length = 1; */
+    buffer_length = 2048;
     uint8_t* buf = static_cast<uint8_t*>(arena.Allocate(buffer_length));
     struct iovec iov, *out_iov;
     iov.iov_base = buf;
@@ -189,31 +190,37 @@ static void PerformConnection(const int fd, Connection* conn) {
     iov.iov_len = n;
     iovs.push_back(iov);
 
-    r = conn->Process(&out_iov, &out_n, &used, &iovs[0], iovs.size());
-    if (ErrorCodeFromResult(r) == ERR_ALERT_CLOSE_NOTIFY)
-      break;
-    MaybePrintResult(r);
-    ASSERT_EQ(0, ErrorCodeFromResult(r));
+    for (;;) {
+      r = conn->Process(&out_iov, &out_n, &used, &iovs[0], iovs.size());
 
-    if (out_n) {
-      char s[9];
-      Buffer buf(out_iov, out_n);
-      ASSERT_EQ(8u, buf.size());
-      ASSERT_TRUE(buf.Read(s, 8));
-      s[8] = 0;
-      ASSERT_STREQ("goodbye!", s);
-    }
+      if (out_n) {
+        char s[9];
+        Buffer buf(out_iov, out_n);
+        ASSERT_EQ(8u, buf.size());
+        ASSERT_TRUE(buf.Read(s, 8));
+        s[8] = 0;
+        ASSERT_STREQ("goodbye!", s);
+      }
 
-    // Need to remove the consumed bytes from the buffer.
-    while (used) {
-      assert(iovs.size() > 0);
-      if (used >= iovs[0].iov_len) {
-        used -= iovs[0].iov_len;
-        iovs.erase(iovs.begin());
-      } else {
-        iovs[0].iov_base = static_cast<uint8_t*>(iovs[0].iov_base) + used;
-        iovs[0].iov_len -= used;
-        used -= used;
+      if (ErrorCodeFromResult(r) == ERR_ALERT_CLOSE_NOTIFY)
+        return;
+      MaybePrintResult(r);
+      ASSERT_EQ(0, ErrorCodeFromResult(r));
+
+      if (!used)
+        break;
+
+      // Need to remove the consumed bytes from the buffer.
+      while (used) {
+        assert(iovs.size() > 0);
+        if (used >= iovs[0].iov_len) {
+          used -= iovs[0].iov_len;
+          iovs.erase(iovs.begin());
+        } else {
+          iovs[0].iov_base = static_cast<uint8_t*>(iovs[0].iov_base) + used;
+          iovs[0].iov_len -= used;
+          used = 0;
+        }
       }
     }
   }
@@ -276,7 +283,7 @@ TEST_F(ConnectionTest, OpenSSLFalseStart) {
   OpenSSLContext ctx;
   Connection conn(&ctx);
   conn.EnableDefault();
-  conn.EnableFalseStart();
+  conn.EnableFalseStart(true);
   StartServer(args);
   PerformConnection(client_, &conn);
 }
@@ -287,7 +294,7 @@ TEST_F(ConnectionTest, GnuTLSFalseStart) {
   OpenSSLContext ctx;
   Connection conn(&ctx);
   conn.EnableDefault();
-  conn.EnableFalseStart();
+  conn.EnableFalseStart(true);
   StartServer(args);
   PerformConnection(client_, &conn);
 }
@@ -342,6 +349,58 @@ TEST_F(ConnectionTest, GnuTLSResume12) {
   ASSERT_TRUE(conn2.did_resume());
 }
 
+TEST_F(ConnectionTest, GnuTLSSessionTickets) {
+  static const char* const args[] = {kGnuTLSHelper, "resume", "session-tickets", NULL};
+  Result r;
+
+  OpenSSLContext ctx;
+  Connection conn(&ctx);
+  conn.EnableDefault();
+  conn.EnableSessionTickets(true);
+  StartServer(args);
+  PerformConnection(client_, &conn);
+  ASSERT_FALSE(conn.did_resume());
+  ASSERT_TRUE(conn.is_resumption_data_availible());
+
+  struct iovec resumption_data;
+  r = conn.GetResumptionData(&resumption_data);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+
+  Connection conn2(&ctx);
+  conn2.EnableDefault();
+  r = conn2.SetResumptionData(static_cast<uint8_t*>(resumption_data.iov_base), resumption_data.iov_len);
+  MaybePrintResult(r);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+  PerformConnection(client_, &conn2);
+  ASSERT_TRUE(conn2.did_resume());
+}
+
+TEST_F(ConnectionTest, OpenSSLSessionTickets) {
+  static const char* const args[] = {kOpenSSLHelper, "session-tickets", NULL};
+  Result r;
+
+  OpenSSLContext ctx;
+  Connection conn(&ctx);
+  conn.EnableDefault();
+  conn.EnableSessionTickets(true);
+  StartServer(args);
+  PerformConnection(client_, &conn);
+  ASSERT_FALSE(conn.did_resume());
+  ASSERT_TRUE(conn.is_resumption_data_availible());
+
+  struct iovec resumption_data;
+  r = conn.GetResumptionData(&resumption_data);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+
+  Connection conn2(&ctx);
+  conn2.EnableDefault();
+  r = conn2.SetResumptionData(static_cast<uint8_t*>(resumption_data.iov_base), resumption_data.iov_len);
+  MaybePrintResult(r);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+  PerformConnection(client_, &conn2);
+  ASSERT_TRUE(conn2.did_resume());
+}
+
 TEST_F(ConnectionTest, OpenSSLSnapStart) {
   static const char* const args[] = {kOpenSSLHelper, "snap-start", NULL};
   Result r;
@@ -359,12 +418,60 @@ TEST_F(ConnectionTest, OpenSSLSnapStart) {
   r = conn.GetSnapStartData(&snap_start_data);
   ASSERT_EQ(0, ErrorCodeFromResult(r));
 
+  const struct iovec *server_certs;
+  unsigned server_certs_len;
+  r = conn.server_certificates(&server_certs, &server_certs_len);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+
   Connection conn2(&ctx);
   conn2.EnableDefault();
+  conn2.SetPredictedCertificates(server_certs, server_certs_len);
   r = conn2.SetSnapStartData(static_cast<uint8_t*>(snap_start_data.iov_base), snap_start_data.iov_len);
   MaybePrintResult(r);
   ASSERT_EQ(0, ErrorCodeFromResult(r));
   PerformConnection(client_, &conn2);
+  ASSERT_TRUE(conn2.did_snap_start());
+}
+
+TEST_F(ConnectionTest, OpenSSLSnapStartResume) {
+  static const char* const args[] = {kOpenSSLHelper, "snap-start", NULL};
+  Result r;
+
+  OpenSSLContext ctx;
+  Connection conn(&ctx);
+  conn.EnableDefault();
+  conn.CollectSnapStartData();
+  StartServer(args);
+  PerformConnection(client_, &conn);
+  ASSERT_FALSE(conn.did_resume());
+  ASSERT_TRUE(conn.is_snap_start_data_available());
+  ASSERT_TRUE(conn.is_resumption_data_availible());
+
+  struct iovec snap_start_data;
+  r = conn.GetSnapStartData(&snap_start_data);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+
+  struct iovec resumption_data;
+  r = conn.GetResumptionData(&resumption_data);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+
+  const struct iovec *server_certs;
+  unsigned server_certs_len;
+  r = conn.server_certificates(&server_certs, &server_certs_len);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+
+  Connection conn2(&ctx);
+  conn2.EnableDefault();
+  conn2.SetPredictedCertificates(server_certs, server_certs_len);
+  r = conn2.SetSnapStartData(static_cast<uint8_t*>(snap_start_data.iov_base), snap_start_data.iov_len);
+  MaybePrintResult(r);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+  r = conn2.SetResumptionData(static_cast<uint8_t*>(resumption_data.iov_base), resumption_data.iov_len);
+  MaybePrintResult(r);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+  PerformConnection(client_, &conn2);
+  ASSERT_TRUE(conn2.did_snap_start());
+  ASSERT_TRUE(conn2.did_resume());
 }
 
 TEST_F(ConnectionTest, OpenSSLSnapStartRecovery) {
@@ -384,12 +491,60 @@ TEST_F(ConnectionTest, OpenSSLSnapStartRecovery) {
   r = conn.GetSnapStartData(&snap_start_data);
   ASSERT_EQ(0, ErrorCodeFromResult(r));
 
+  const struct iovec *server_certs;
+  unsigned server_certs_len;
+  r = conn.server_certificates(&server_certs, &server_certs_len);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+
   Connection conn2(&ctx);
   conn2.EnableDefault();
+  conn2.SetPredictedCertificates(server_certs, server_certs_len);
   r = conn2.SetSnapStartData(static_cast<uint8_t*>(snap_start_data.iov_base), snap_start_data.iov_len);
   MaybePrintResult(r);
   ASSERT_EQ(0, ErrorCodeFromResult(r));
   PerformConnection(client_, &conn2);
+  ASSERT_FALSE(conn2.did_snap_start());
+}
+
+TEST_F(ConnectionTest, OpenSSLSnapStartResumeRecovery) {
+  static const char* const args[] = {kOpenSSLHelper, "snap-start-recovery", NULL};
+  Result r;
+
+  OpenSSLContext ctx;
+  Connection conn(&ctx);
+  conn.EnableDefault();
+  conn.CollectSnapStartData();
+  StartServer(args);
+  PerformConnection(client_, &conn);
+  ASSERT_FALSE(conn.did_resume());
+  ASSERT_TRUE(conn.is_snap_start_data_available());
+  ASSERT_TRUE(conn.is_resumption_data_availible());
+
+  struct iovec snap_start_data;
+  r = conn.GetSnapStartData(&snap_start_data);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+
+  struct iovec resumption_data;
+  r = conn.GetResumptionData(&resumption_data);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+
+  const struct iovec *server_certs;
+  unsigned server_certs_len;
+  r = conn.server_certificates(&server_certs, &server_certs_len);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+
+  Connection conn2(&ctx);
+  conn2.EnableDefault();
+  conn2.SetPredictedCertificates(server_certs, server_certs_len);
+  r = conn2.SetSnapStartData(static_cast<uint8_t*>(snap_start_data.iov_base), snap_start_data.iov_len);
+  MaybePrintResult(r);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+  r = conn2.SetResumptionData(static_cast<uint8_t*>(resumption_data.iov_base), resumption_data.iov_len);
+  MaybePrintResult(r);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+  PerformConnection(client_, &conn2);
+  ASSERT_TRUE(conn2.did_snap_start());
+  ASSERT_TRUE(conn2.did_resume());
 }
 
 }  // anonymous namespace

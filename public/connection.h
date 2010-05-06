@@ -63,7 +63,7 @@ class Connection {
   //   iov: the data from the peer. *This is mutated by |Process|*.
   //   n: the number of elements in |iov|.
   //   returns:
-  //     0: success
+  //     0: on success
   //     ERR_ALERT_CLOSE_NOTIFY: the peer securely signaled the end of the
   //       stream. Application data may still have resulted from this call.
   //
@@ -79,6 +79,10 @@ class Connection {
   //
   // Data from the peer can consist entirely of overhead so |out_n| may be zero
   // on return even if |used| is non-zero.
+  //
+  // Process may also return before all the possible data has been processed.
+  // Only if Process returns with |used| equal to 0 and |need_to_write()| is
+  // false can the user assume that the input buffer has been exhausted.
   Result Process(struct iovec** out, unsigned* out_n, size_t* used,
                  const struct iovec* iov, unsigned n);
 
@@ -151,6 +155,12 @@ class Connection {
   // Otherwise it will return NULL.
   const char* cipher_suite_name() const;
 
+  // SetPredictedCertificates informs the connection of the expected
+  // certificates of the peer. The format matches the result of
+  // |server_certificates()|. Knowning the peer's certificates allows for
+  // several optimistic optimisations, including snap-start (see below).
+  void SetPredictedCertificates(const struct iovec* iovs, unsigned len);
+
   void CollectSnapStartData();
   bool is_snap_start_data_available() const;
   Result GetSnapStartData(struct iovec* iov);
@@ -168,8 +178,10 @@ class Connection {
   void EnableRSA(bool enable);
   void EnableRC4(bool enable);
   void EnableSHA(bool enable);
+  void EnableMD5(bool enable);
 
-  void EnableFalseStart();
+  void EnableFalseStart(bool enable);
+  void EnableSessionTickets(bool enable);
 
   // Set sensible defaults.
   void EnableDefault();

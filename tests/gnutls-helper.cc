@@ -46,12 +46,14 @@ int
 main(int argc, char **argv) {
   int ret;
 
-  bool tls12 = false, resume = false;
+  bool tls12 = false, resume = false, session_tickets = false;
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "tls1.2") == 0) {
       tls12 = true;
     } else if (strcmp(argv[i], "resume") == 0) {
       resume = true;
+    } else if (strcmp(argv[i], "session-tickets") == 0) {
+      session_tickets = true;
     } else {
       fprintf(stderr, "Unknown argument: %s\n", argv[i]);
       return 1;
@@ -68,15 +70,23 @@ main(int argc, char **argv) {
   gnutls_certificate_allocate_credentials(&x509_cred);
   gnutls_certificate_set_x509_key_file(x509_cred, kCertFile, kKeyFile, GNUTLS_X509_FMT_PEM);
 
+  gnutls_datum_t session_ticket_key;
+  if (session_tickets)
+    gnutls_session_ticket_key_generate(&session_ticket_key);
+
   for (unsigned connections = 0; ; connections++) {
     gnutls_session_t session;
     gnutls_init(&session, GNUTLS_SERVER);
 
     if (resume) {
-      gnutls_db_set_store_function(session, db_store);
-      gnutls_db_set_retrieve_function(session, db_retrieve);
-      gnutls_db_set_remove_function(session, db_remove);
-      gnutls_db_set_ptr(session, &db);
+      if (session_tickets) {
+        gnutls_session_ticket_enable_server(session, &session_ticket_key);
+      } else {
+        gnutls_db_set_store_function(session, db_store);
+        gnutls_db_set_retrieve_function(session, db_retrieve);
+        gnutls_db_set_remove_function(session, db_remove);
+        gnutls_db_set_ptr(session, &db);
+      }
     }
 
     const char* err_pos;

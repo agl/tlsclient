@@ -36,6 +36,7 @@ bool IsValidHandshakeType(uint8_t type) {
     case CERTIFICATE_VERIFY:
     case CLIENT_KEY_EXCHANGE:
     case FINISHED:
+    case SESSION_TICKET:
       return true;
     default:
       return false;
@@ -133,6 +134,22 @@ Result AlertTypeToResult(AlertType type) {
     default:
       return ERROR_RESULT(ERR_UNKNOWN_FATAL_ALERT);
   }
+}
+
+// NextIsApplicationData returns true if the next record in the given Buffer is
+// an application data record. The record need not be complete. If insufficient
+// data is in the buffer, it returns false.
+bool NextIsApplicationData(Buffer* in) {
+  if (!in->remaining())
+    return false;
+
+  const Buffer::Pos pos = in->Tell();
+  uint8_t type;
+  const bool r = in->U8(&type);
+  in->Seek(pos);
+  if (!r)
+    return false;
+  return static_cast<RecordType>(type) == RECORD_APPLICATION_DATA;
 }
 
 // FIXME: I just made this up --agl
@@ -327,6 +344,7 @@ Result GenerateMasterSecret(ConnectionPrivate* priv) {
   if (!MasterSecretFromPreMasterSecret(priv->master_secret, priv->version, priv->premaster_secret, sizeof(priv->premaster_secret), priv->client_random, priv->server_random))
     return ERROR_RESULT(ERR_INTERNAL_ERROR);
 
+  // FIXME: really? Is this true with session tickets?
   priv->resumption_data_ready = true;
   return 0;
 }
@@ -399,7 +417,13 @@ static const HandshakeMessage kPermittedHandshakeMessagesPerState[][2] = {
   /* RECV_SNAP_START_SERVER_HELLO */ { SERVER_HELLO, INVALID_MESSAGE },
   /* RECV_SNAP_START_SERVER_CERTIFICATE */ { CERTIFICATE, INVALID_MESSAGE },
   /* RECV_SNAP_START_SERVER_HELLO_DONE */ { SERVER_HELLO_DONE, INVALID_MESSAGE },
+  /* RECV_SNAP_START_RESUME_SERVER_HELLO */ { SERVER_HELLO, INVALID_MESSAGE },
+  /* RECV_SNAP_START_RESUME_CHANGE_CIPHER_SPEC */ { CHANGE_CIPHER_SPEC, INVALID_MESSAGE },
+  /* RECV_SNAP_START_RESUME_FINISHED */ { FINISHED, INVALID_MESSAGE },
   /* SEND_SNAP_START_RECOVERY */ { INVALID_MESSAGE },
+  /* RECV_SESSION_TICKET */ { SESSION_TICKET, INVALID_MESSAGE },
+  /* RECV_RESUME_SESSION_TICKET */ { SESSION_TICKET, INVALID_MESSAGE },
+  /* RECV_SNAP_START_SESSION_TICKET */ { SESSION_TICKET, INVALID_MESSAGE },
 };
 
 static void AddHandshakeMessageToVerifyHash(HandshakeHash* handshake_hash, HandshakeMessage type, Buffer* in) {
@@ -428,7 +452,8 @@ Result ProcessHandshakeMessage(ConnectionPrivate* priv, HandshakeMessage type, B
       type != FINISHED && type != SERVER_HELLO && type != CHANGE_CIPHER_SPEC &&
       priv->state != RECV_SNAP_START_SERVER_HELLO &&
       priv->state != RECV_SNAP_START_SERVER_CERTIFICATE &&
-      priv->state != RECV_SNAP_START_SERVER_HELLO_DONE) {
+      priv->state != RECV_SNAP_START_SERVER_HELLO_DONE &&
+      priv->state != RECV_SNAP_START_SERVER_HELLO) {
     AddHandshakeMessageToVerifyHash(priv->handshake_hash, type, in);
   }
 
@@ -450,12 +475,18 @@ Result ProcessHandshakeMessage(ConnectionPrivate* priv, HandshakeMessage type, B
       priv->read_seq_num = 0;
       if (priv->state == RECV_CHANGE_CIPHER_SPEC) {
         priv->state = RECV_FINISHED;
-      } else {
+      } else if (priv->state == RECV_RESUME_CHANGE_CIPHER_SPEC) {
         priv->state = RECV_RESUME_FINISHED;
+      } else if (priv->state == RECV_SNAP_START_RESUME_CHANGE_CIPHER_SPEC) {
+        priv->state = RECV_SNAP_START_RESUME_FINISHED;
+      } else {
+        return ERROR_RESULT(ERR_INTERNAL_ERROR);
       }
       return 0;
     case FINISHED:
       return ProcessServerFinished(priv, in);
+    case SESSION_TICKET:
+      return ProcessSessionTicket(priv, in);
     default:
       return ERROR_RESULT(ERR_INTERNAL_ERROR);
   }
@@ -483,13 +514,23 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
     if (memcmp(priv->server_random, server_random, sizeof(priv->server_random)) == 0) {
       // Snap start accepted.
       priv->recording_application_data = false;
-      priv->state = RECV_SNAP_START_SERVER_CERTIFICATE;
+      priv->did_snap_start = true;
+      if (!priv->expecting_session_ticket) {
+        // This is a snap-start resumption, otherwise we would have requested a
+        // session ticket.
+        priv->did_resume = true;
+        priv->state = RECV_RESUME_CHANGE_CIPHER_SPEC;
+      } else {
+        priv->state = RECV_SNAP_START_SERVER_CERTIFICATE;
+      }
       return 0;
     }
 
     // The server didn't accept our suggested server random which means that
     // we need to perform snap start recovery.
     priv->snap_start_recovery = true;
+    priv->server_verify.iov_base = NULL;
+    priv->server_verify.iov_len = 0;
   }
   memcpy(priv->server_random, server_random, sizeof(priv->server_random));
 
@@ -507,6 +548,7 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
     // Session ids match. We're resuming a session.
     resumption = true;
   } else {
+    session_id_buf.Rewind();
     priv->session_id_len = session_id_buf.remaining();
     if (!session_id_buf.Read(priv->session_id, priv->session_id_len))
       return ERROR_RESULT(ERR_INTERNAL_ERROR);
@@ -563,6 +605,8 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
     Result r = SetupCiperSpec(priv);
     if (r)
       return r;
+    // We don't know if we're going to get a session ticket until we have
+    // processes the extensions so we deal with that case below.
     priv->state = RECV_RESUME_CHANGE_CIPHER_SPEC;
     priv->did_resume = true;
     priv->resumption_data_ready = true;
@@ -595,6 +639,9 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
     priv->snap_start_server_hello.iov_len = server_hello_len;
     in->Seek(end);
   }
+
+  if (resumption && priv->expecting_session_ticket)
+    priv->state = RECV_RESUME_SESSION_TICKET;
 
   return 0;
 }
@@ -648,8 +695,11 @@ Result ProcessServerHelloDone(ConnectionPrivate* priv, Buffer* in) {
     priv->snap_start_data_available = true;
 
   if (priv->state == RECV_SNAP_START_SERVER_HELLO_DONE) {
-    priv->did_snap_start = true;
-    priv->state = RECV_CHANGE_CIPHER_SPEC;
+    if (priv->expecting_session_ticket) {
+      priv->state = RECV_SNAP_START_SESSION_TICKET;
+    } else {
+      priv->state = RECV_CHANGE_CIPHER_SPEC;
+    }
   } else if (priv->snap_start_recovery) {
     priv->state = SEND_SNAP_START_RECOVERY;
   } else {
@@ -661,7 +711,15 @@ Result ProcessServerHelloDone(ConnectionPrivate* priv, Buffer* in) {
 
 Result ProcessServerFinished(ConnectionPrivate* priv, Buffer* in) {
   unsigned server_verify_len;
-  const uint8_t* const server_verify = priv->handshake_hash->ServerVerifyData(&server_verify_len, priv->master_secret, sizeof(priv->master_secret));
+  const uint8_t* server_verify;
+
+  if (priv->server_verify.iov_base) {
+    server_verify = static_cast<uint8_t*>(priv->server_verify.iov_base);
+    server_verify_len = priv->server_verify.iov_len;
+  } else {
+    server_verify = priv->handshake_hash->ServerVerifyData(&server_verify_len, priv->master_secret, sizeof(priv->master_secret));
+  }
+
   uint8_t verify_data[36];
 
   if (in->remaining() != server_verify_len)
@@ -677,11 +735,46 @@ Result ProcessServerFinished(ConnectionPrivate* priv, Buffer* in) {
   priv->application_data_allowed = true;
   priv->can_send_application_data = true;
 
-  if (priv->state == RECV_FINISHED) {
+  if (priv->state == RECV_FINISHED ||
+      priv->state == RECV_SNAP_START_RESUME_FINISHED) {
     priv->state = AWAIT_HELLO_REQUEST;
-  } else {
+  } else if (priv->state == RECV_RESUME_FINISHED) {
     AddHandshakeMessageToVerifyHash(priv->handshake_hash, FINISHED, in);
     priv->state = SEND_RESUME_PHASE_ONE;
+  } else {
+    return ERROR_RESULT(ERR_INTERNAL_ERROR);
+  }
+
+  return 0;
+}
+
+Result ProcessSessionTicket(ConnectionPrivate* priv, Buffer* in) {
+  uint32_t lifetime_hint;
+  if (!in->U32(&lifetime_hint))
+    return ERROR_RESULT(ERR_INVALID_HANDSHAKE_MESSAGE);
+
+  // We ignore the lifetime hint for now. OpenSSL sets it to zero anyway.
+  bool ok;
+  Buffer ticket(in->VariableLength(&ok, 2));
+  const size_t len = ticket.remaining();
+  if (!ok || !len)
+    return ERROR_RESULT(ERR_INVALID_HANDSHAKE_MESSAGE);
+
+  priv->session_ticket.iov_len = len;
+  priv->session_ticket.iov_base = priv->arena.Allocate(len);
+  if (!ticket.Read(priv->session_ticket.iov_base, len))
+    return ERROR_RESULT(ERR_INTERNAL_ERROR);
+
+  priv->resumption_data_ready = true;
+
+  if (priv->state == RECV_SESSION_TICKET) {
+    priv->state = RECV_CHANGE_CIPHER_SPEC;
+  } else if (priv->state == RECV_RESUME_SESSION_TICKET) {
+    priv->state = RECV_RESUME_CHANGE_CIPHER_SPEC;
+  } else if (priv->state == RECV_SNAP_START_SESSION_TICKET) {
+    priv->state = RECV_CHANGE_CIPHER_SPEC;
+  } else {
+    return ERROR_RESULT(ERR_INTERNAL_ERROR);
   }
 
   return 0;

@@ -34,7 +34,6 @@ ConnectionPrivate::~ConnectionPrivate() {
   delete server_cert;
   memset(master_secret, 0, sizeof(master_secret));
   delete handshake_hash;
-  delete predicted_server_cert;
 
   if (read_cipher_spec)
     read_cipher_spec->DecRef();
@@ -148,7 +147,34 @@ Result Connection::Get(struct iovec* out) {
         return ERROR_RESULT(ERR_INTERNAL_ERROR);
       priv_->handshake_hash->Update(s.data(), s.size());
       priv_->handshake_hash->Update(priv_->predicted_response.iov_base, priv_->predicted_response.iov_len);
-      priv_->state = SEND_PHASE_TWO;
+      if (priv_->expecting_session_ticket) {
+        priv_->state = SEND_PHASE_TWO;
+      } else {
+        // The Finished message, which we are about to send, needs to include
+        // the server's Finished message, which doesn't exist yet. None the
+        // less, we can predict the server's finished message and feed it into
+        // our handshake hash, but we have to remember its value so that we can
+        // compare it against the message, when we receive it.
+
+        unsigned verify_data_size;
+        const uint8_t* verify_data = priv_->handshake_hash->ServerVerifyData(&verify_data_size, priv_->master_secret, sizeof(priv_->master_secret));
+        priv_->server_verify.iov_base = priv_->arena.Allocate(verify_data_size);
+        memcpy(priv_->server_verify.iov_base, verify_data, verify_data_size);
+        priv_->server_verify.iov_len = verify_data_size;
+
+        uint8_t handshake_header[4];
+        handshake_header[0] = static_cast<uint8_t>(FINISHED);
+        handshake_header[1] = handshake_header[2] = 0;
+        handshake_header[3] = verify_data_size;
+
+        priv_->handshake_hash->Update(handshake_header, sizeof(handshake_header));
+        priv_->handshake_hash->Update(verify_data, verify_data_size);
+
+        Result r = SetupCiperSpec(priv_);
+        if (r)
+          return r;
+        priv_->state = SEND_RESUME_PHASE_ONE;
+      }
     } else {
       if ((r = EncryptRecord(priv_, &s)))
         return r;
@@ -224,11 +250,19 @@ Result Connection::Get(struct iovec* out) {
         if (priv_->snap_start_attempt) {
           priv_->state = RECV_SNAP_START_SERVER_HELLO;
         } else {
-          priv_->state = RECV_CHANGE_CIPHER_SPEC;
+          if (priv_->expecting_session_ticket) {
+            priv_->state = RECV_SESSION_TICKET;
+          } else {
+            priv_->state = RECV_CHANGE_CIPHER_SPEC;
+          }
         }
         break;
       case SEND_RESUME_PHASE_ONE:
-        priv_->state = AWAIT_HELLO_REQUEST;
+        if (priv_->snap_start_attempt && !priv_->expecting_session_ticket) {
+          priv_->state = RECV_SNAP_START_SERVER_HELLO;
+        } else {
+          priv_->state = AWAIT_HELLO_REQUEST;
+        }
         break;
       case SEND_SNAP_START_RECOVERY:
         break;
@@ -254,7 +288,11 @@ Result Connection::Get(struct iovec* out) {
     }
     priv_->recorded_application_data.clear();
 
-    priv_->state = RECV_CHANGE_CIPHER_SPEC;
+    if (priv_->expecting_session_ticket) {
+      priv_->state = RECV_SESSION_TICKET;
+    } else {
+      priv_->state = RECV_CHANGE_CIPHER_SPEC;
+    }
     priv_->snap_start_attempt = false;
   }
 
@@ -279,10 +317,15 @@ void Connection::EnableSHA(bool enable) {
   SetEnableBit(CIPHERSUITE_SHA, enable);
 }
 
+void Connection::EnableMD5(bool enable) {
+  SetEnableBit(CIPHERSUITE_MD5, enable);
+}
+
 void Connection::EnableDefault() {
   SetEnableBit(CIPHERSUITE_RSA, true);
   SetEnableBit(CIPHERSUITE_RC4, true);
   SetEnableBit(CIPHERSUITE_SHA, true);
+  SetEnableBit(CIPHERSUITE_MD5, true);
 }
 
 void Connection::SetEnableBit(unsigned mask, bool enable) {
@@ -361,7 +404,11 @@ Result Connection::Process(struct iovec** out, unsigned* out_n, size_t* used,
     if (need_to_write())
       return 0;
 
-    const size_t prev_num_out_vectors = priv_->out_vectors.size();
+    if (priv_->out_vectors.size() && !NextIsApplicationData(&buf)) {
+      // We had some amount of application data already and now we have another
+      // form of record. We'll return the application level data now.
+      return 0;
+    }
     Result r = GetRecordOrHandshake(&found, &type, &htype, &priv_->out_vectors, &buf, priv_);
     if (r)
       return r;
@@ -376,12 +423,6 @@ Result Connection::Process(struct iovec** out, unsigned* out_n, size_t* used,
       *out_n = priv_->out_vectors.size();
       *used = buf.TellBytes();
       continue;
-    }
-
-    if (prev_num_out_vectors) {
-      // We had some amount of application data already and now we have another
-      // form of record. We'll return the application level data now.
-      return 0;
     }
 
     Buffer in(&priv_->out_vectors[0], priv_->out_vectors.size());
@@ -426,14 +467,14 @@ static const uint8_t kResumptionSerialisationVersion = 0;
 
 bool Connection::is_resumption_data_availible() const {
   return priv_->resumption_data_ready &&
-         priv_->session_id_len;
+         (priv_->session_id_len || priv_->expecting_session_ticket);
 }
 
 Result Connection::GetResumptionData(struct iovec* iov) {
   Sink sink(&priv_->arena);
 
   if (priv_->state != AWAIT_HELLO_REQUEST ||
-      priv_->session_id_len == 0) {
+      (priv_->session_id_len == 0 && !priv_->expecting_session_ticket)) {
     return ERROR_RESULT(ERR_RESUMPTION_DATA_NOT_READY);
   }
 
@@ -441,9 +482,19 @@ Result Connection::GetResumptionData(struct iovec* iov) {
   sink.U16(priv_->cipher_suite->value);
   uint8_t* master = sink.Block(sizeof(priv_->master_secret));
   memcpy(master, priv_->master_secret, sizeof(priv_->master_secret));
-  sink.U8(priv_->session_id_len);
-  uint8_t* session_id = sink.Block(sizeof(priv_->session_id));
-  memcpy(session_id, priv_->session_id, sizeof(priv_->session_id));
+
+  if (priv_->session_id_len) {
+    sink.U8(RESUMPTION_METHOD_SESSION_ID);
+    sink.U8(priv_->session_id_len);
+    uint8_t* session_id = sink.Block(priv_->session_id_len);
+    memcpy(session_id, priv_->session_id, priv_->session_id_len);
+  } else {
+    sink.U8(RESUMPTION_METHOD_SESSION_TICKET);
+    const size_t len = priv_->session_ticket.iov_len;
+    sink.U16(len);
+    uint8_t* ticket = sink.Block(len);
+    memcpy(ticket, priv_->session_ticket.iov_base, len);
+  }
 
   iov->iov_base = sink.Release();
   iov->iov_len = sink.size();
@@ -484,12 +535,37 @@ Result Connection::SetResumptionData(const uint8_t* data, size_t len) {
 
   priv_->cipher_suite = cipher_suite;
 
+  uint8_t resumption_type;
+
   if (!buf.Read(priv_->master_secret, sizeof(priv_->master_secret)) ||
-      !buf.Read(&priv_->session_id_len, sizeof(priv_->session_id_len)) ||
-      priv_->session_id_len == 0 ||
-      priv_->session_id_len > 32 ||
-      !buf.Read(priv_->session_id, sizeof(priv_->session_id))) {
-    priv_->session_id_len = 0;
+      !buf.Read(&resumption_type, sizeof(resumption_type))) {
+    return ERROR_RESULT(ERR_CANNOT_PARSE_RESUMPTION_DATA);
+  }
+
+  if (resumption_type == RESUMPTION_METHOD_SESSION_ID) {
+    if (!buf.Read(&priv_->session_id_len, sizeof(priv_->session_id_len)) ||
+        priv_->session_id_len == 0 ||
+        priv_->session_id_len > sizeof(priv_->session_id) ||
+        !buf.Read(priv_->session_id, priv_->session_id_len)) {
+      priv_->session_id_len = 0;
+      return ERROR_RESULT(ERR_CANNOT_PARSE_RESUMPTION_DATA);
+    }
+  } else if (resumption_type == RESUMPTION_METHOD_SESSION_TICKET) {
+    uint16_t len;
+    if (!buf.U16(&len))
+      return ERROR_RESULT(ERR_CANNOT_PARSE_RESUMPTION_DATA);
+    priv_->session_ticket.iov_base = priv_->arena.Allocate(len);
+    priv_->session_ticket.iov_len = len;
+    if (!buf.Read(priv_->session_ticket.iov_base, len))
+      return ERROR_RESULT(ERR_CANNOT_PARSE_RESUMPTION_DATA);
+    priv_->session_tickets = true;
+    priv_->have_session_ticket_to_present = true;
+
+    // We need to send a session id in order to recognise when the server
+    // accepted our ticket.
+    priv_->session_id_len = 1;
+    priv_->session_id[0] = 0;
+  } else {
     return ERROR_RESULT(ERR_CANNOT_PARSE_RESUMPTION_DATA);
   }
 
@@ -500,12 +576,27 @@ bool Connection::did_resume() const {
   return priv_->did_resume;
 }
 
-void Connection::EnableFalseStart() {
-  priv_->false_start = true;
+void Connection::EnableFalseStart(bool enable) {
+  priv_->false_start = enable;
+}
+
+void Connection::EnableSessionTickets(bool enable) {
+  priv_->session_tickets = enable;
+}
+
+void Connection::SetPredictedCertificates(const struct iovec* iovs, unsigned len) {
+  priv_->predicted_certificates.resize(len);
+
+  for (unsigned i = 0; i < len; i++) {
+    priv_->predicted_certificates[i].iov_base = priv_->arena.Allocate(iovs[i].iov_len);
+    priv_->predicted_certificates[i].iov_len = iovs[i].iov_len;
+    memcpy(priv_->predicted_certificates[i].iov_base, iovs[i].iov_base, iovs[i].iov_len);
+  }
 }
 
 void Connection::CollectSnapStartData() {
   priv_->collect_snap_start = true;
+  priv_->session_tickets = true;
 }
 
 bool Connection::is_snap_start_data_available() const {
@@ -531,16 +622,6 @@ Result Connection::GetSnapStartData(struct iovec* iov) {
     memcpy(server_hello, priv_->snap_start_server_hello.iov_base, priv_->snap_start_server_hello.iov_len);
   }
 
-  {
-    Sink certs_sink(sink.VariableLengthBlock(3));
-
-    for (std::vector<struct iovec>::const_iterator i = priv_->server_certificates.begin(); i != priv_->server_certificates.end(); i++) {
-      Sink cert_sink(certs_sink.VariableLengthBlock(3));
-      uint8_t* cert = cert_sink.Block(i->iov_len);
-      memcpy(cert, i->iov_base, i->iov_len);
-    }
-  }
-
   iov->iov_base = sink.Release();
   iov->iov_len = sink.size();
 
@@ -551,7 +632,9 @@ Result Connection::SetSnapStartData(const uint8_t* data, size_t len) {
   const struct iovec iov = {const_cast<uint8_t*>(data), len};
   Buffer buf(&iov, 1);
   bool ok;
-  Sink predicted_response(&priv_->arena);
+
+  if (priv_->predicted_certificates.size() == 0)
+    return ERROR_RESULT(ERR_NEED_PREDICTED_CERTS_FIRST);
 
   uint8_t version;
   if (!buf.Read(&version, 1) || version != kSnapStartSerialisationVersion)
@@ -587,45 +670,15 @@ Result Connection::SetSnapStartData(const uint8_t* data, size_t len) {
     return ERROR_RESULT(ERR_CANNOT_PARSE_SNAP_START_DATA);
 
   const size_t server_hello_len = server_hello_buf.remaining();
-  {
-    Sink server_hello_sink(predicted_response.HandshakeMessage(SERVER_HELLO));
-    uint8_t* server_hello = server_hello_sink.Block(server_hello_len);
-    if (!server_hello_buf.Read(server_hello, server_hello_len))
-      return ERROR_RESULT(ERR_INTERNAL_ERROR);
-  }
+  priv_->predicted_server_hello.iov_base = priv_->arena.Allocate(server_hello_len);
+  priv_->predicted_server_hello.iov_len = server_hello_len;
 
-  Buffer certs_buf(buf.VariableLength(&ok, 3));
-  if (!ok)
-    return ERROR_RESULT(ERR_CANNOT_PARSE_SNAP_START_DATA);
-  {
-    Sink cert_msg_sink(predicted_response.HandshakeMessage(CERTIFICATE));
-    Sink certs_sink(cert_msg_sink.VariableLengthBlock(3));
-    bool first_cert = true;
+  if (!server_hello_buf.Read(priv_->predicted_server_hello.iov_base, server_hello_len))
+    return ERROR_RESULT(ERR_INTERNAL_ERROR);
 
-    while (certs_buf.remaining()) {
-      Sink cert_sink(certs_sink.VariableLengthBlock(3));
-      Buffer cert_buf(certs_buf.VariableLength(&ok, 3));
-      if (!ok)
-        return ERROR_RESULT(ERR_CANNOT_PARSE_SNAP_START_DATA);
-      const size_t len = cert_buf.remaining();
-      uint8_t* cert = cert_sink.Block(len);
-      if (!cert_buf.Read(cert, len))
-        return ERROR_RESULT(ERR_INTERNAL_ERROR);
-      if (first_cert) {
-        first_cert = false;
-        priv_->server_cert = priv_->ctx->ParseCertificate(cert, len);
-        if (!priv_->server_cert)
-          return ERROR_RESULT(ERR_CANNOT_PARSE_CERTIFICATE);
-      }
-    }
-  }
-
-  predicted_response.HandshakeMessage(SERVER_HELLO_DONE);
-
-  priv_->predicted_response.iov_len = predicted_response.size();
-  priv_->predicted_response.iov_base = predicted_response.Release();
   priv_->snap_start_attempt = true;
   priv_->version = priv_->predicted_server_version;
+  priv_->session_tickets = true;
 
   return 0;
 }

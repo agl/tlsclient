@@ -27,7 +27,7 @@ main(int argc, char **argv) {
   OpenSSL_add_all_algorithms();
   SSL_load_error_strings();
 
-  bool sni = false, sni_good = false, snap_start = false, snap_start_recovery = false, sslv3 = false;
+  bool sni = false, sni_good = false, snap_start = false, snap_start_recovery = false, sslv3 = false, session_tickets = false;
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "sni") == 0) {
       sni = true;
@@ -38,6 +38,8 @@ main(int argc, char **argv) {
       snap_start_recovery = true;
     } else if (strcmp(argv[i], "sslv3") == 0) {
       sslv3 = true;
+    } else if (strcmp(argv[i], "session-tickets") == 0) {
+      session_tickets = true;
     } else {
       fprintf(stderr, "Unknown argument: %s\n", argv[i]);
       return 1;
@@ -99,8 +101,11 @@ main(int argc, char **argv) {
     return 1;
   }
 
+  if (session_tickets)
+    SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_BOTH);
+
   unsigned connection_limit = 1;
-  if (snap_start)
+  if (snap_start || session_tickets)
     connection_limit = 2;
 
   for (unsigned connections = 0; connections < connection_limit; connections++) {
@@ -146,6 +151,8 @@ main(int argc, char **argv) {
 
     SSL_shutdown(server);
     SSL_free(server);
+
+    printf("****************************\n");
   }
 
   return 0;

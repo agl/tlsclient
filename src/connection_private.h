@@ -47,12 +47,16 @@ struct ConnectionPrivate {
         server_supports_snap_start(false),
         snap_start_data_available(false),
         snap_start_attempt(false),
-        predicted_server_cert(NULL),
         snap_start_recovery(false),
         recording_application_data(false),
-        did_snap_start(false) {
+        did_snap_start(false),
+        session_tickets(false),
+        have_session_ticket_to_present(false),
+        expecting_session_ticket(false) {
     sent_client_hello.iov_base = 0;
     sent_client_key_exchange.iov_base = 0;
+    server_verify.iov_base = 0;
+    server_verify.iov_len = 0;
   }
 
   ~ConnectionPrivate();
@@ -145,14 +149,43 @@ struct ConnectionPrivate {
   bool snap_start_data_available;
   struct iovec snap_start_server_hello;
 
+  // The peer's expected certificates in wire format and wire order.
+  std::vector<struct iovec> predicted_certificates;
+
+  // This is true if we are attempting a snap start handshake.
   bool snap_start_attempt;
+  // If we're attempting a snap start, we need to know the version that the
+  // server will agree on in order to put it in the record headers.
   TLSVersion predicted_server_version;
+  // This is the server's predicted handshake reply at the handshake level
+  // (i.e. doesn't include record headers).
+  struct iovec predicted_server_hello;
   struct iovec predicted_response;
-  Certificate* predicted_server_cert;
+  // If the server rejected our snap-start then this is true.
   bool snap_start_recovery;
+  // If we are sending application data records after a snap-start we have to
+  // record them in case we enter recovery and need to retransmit.
   bool recording_application_data;
   std::vector<struct iovec> recorded_application_data;
+  // This is true if the handshake successfully managed a snap-start (without
+  // entering recovery)
   bool did_snap_start;
+
+  // This is the server's expected Finished data for the snap-start resume
+  // case.
+  struct iovec server_verify;
+
+  // This is true if session tickets are enabled (i.e. we'll send the extension
+  // and such)
+  bool session_tickets;
+  // If this is true, then |session_ticket| contains a session ticket that
+  // we'll attempt to resume with.
+  bool have_session_ticket_to_present;
+  // If this is true, then the server indicated that it'll send a session
+  // ticket in this handshake. Once |resumption_data_ready| is true, then the
+  // next session ticket will be stored in |session_ticket|.
+  bool expecting_session_ticket;
+  struct iovec session_ticket;
 };
 
 }  // namespace tlsclient

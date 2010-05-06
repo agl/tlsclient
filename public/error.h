@@ -87,6 +87,7 @@ enum ErrorCode {
   ERR_RESUMPTION_CIPHER_SUITE_MISMATCH = 57,
   ERR_SNAP_START_DATA_NOT_READY = 58,
   ERR_CANNOT_PARSE_SNAP_START_DATA = 59,
+  ERR_NEED_PREDICTED_CERTS_FIRST = 60,
 
   // Remember to add the string to the array in src/error.cc!
 

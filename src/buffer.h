@@ -232,6 +232,18 @@ class Buffer {
     return true;
   }
 
+  bool U32(uint32_t* out) {
+    uint8_t buf[4], *u32;
+    u32 = Get(buf, 4);
+    if (!u32)
+      return false;
+    *out = static_cast<uint32_t>(u32[0]) << 24 |
+           static_cast<uint32_t>(u32[1]) << 16 |
+           static_cast<uint32_t>(u32[2]) << 8 |
+           static_cast<uint32_t>(u32[3]);
+    return true;
+  }
+
   Buffer VariableLength(bool* ok, unsigned len_size) {
     assert(len_size > 0 && len_size <= 4);
     uint8_t temp[4], *lenbuffer;

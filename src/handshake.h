@@ -28,6 +28,9 @@ enum HandshakeState {
   RECV_SNAP_START_SERVER_CERTIFICATE,
   RECV_SNAP_START_SERVER_HELLO_DONE,
   SEND_SNAP_START_RECOVERY,
+  RECV_SESSION_TICKET,
+  RECV_RESUME_SESSION_TICKET,
+  RECV_SNAP_START_SESSION_TICKET,
   // Changing something here? Don't forget to update
   // kPermittedHandshakeMessagesPerState!
 };
@@ -36,6 +39,7 @@ enum HandshakeMessage {
   HELLO_REQUEST = 0,
   CLIENT_HELLO = 1,
   SERVER_HELLO = 2,
+  SESSION_TICKET = 4,
   CERTIFICATE = 11,
   SERVER_KEY_EXCHANGE = 12,
   CERTIFICATE_REQUEST = 13,
@@ -111,6 +115,14 @@ struct KeyBlock {
   uint8_t server_iv[MAX_LEN];
 };
 
+// ResumptionTypes enumerates the different sorts of resumption data that we'll
+// serialise in |GetResumptionData|. These values may be stored on disk so
+// should never be changed lightly.
+enum ResumptionTypes {
+  RESUMPTION_METHOD_SESSION_ID = 0,
+  RESUMPTION_METHOD_SESSION_TICKET = 1,
+};
+
 class Sink;
 struct ConnectionPrivate;
 class Buffer;
@@ -120,6 +132,7 @@ bool IsValidVersion(uint16_t wire_version);
 Result MarshalClientHello(Sink* sink, ConnectionPrivate* priv);
 Result MarshalClientKeyExchange(Sink* sink, ConnectionPrivate* priv);
 Result MarshalFinished(Sink* sink, ConnectionPrivate* priv);
+bool NextIsApplicationData(Buffer* in);
 Result GetHandshakeMessage(bool* found, HandshakeMessage* htype, std::vector<struct iovec>* out, Buffer* in);
 Result GetRecordOrHandshake(bool* found, RecordType* type, HandshakeMessage* htype, std::vector<struct iovec>* out, Buffer* in, ConnectionPrivate* priv);
 Result AlertTypeToResult(AlertType);
@@ -129,6 +142,7 @@ Result ProcessHandshakeMessage(ConnectionPrivate* priv, HandshakeMessage type, B
 Result ProcessServerCertificate(ConnectionPrivate* priv, Buffer* in);
 Result ProcessServerHelloDone(ConnectionPrivate* priv, Buffer* in);
 Result ProcessServerFinished(ConnectionPrivate* priv, Buffer* in);
+Result ProcessSessionTicket(ConnectionPrivate* priv, Buffer* in);
 Result GenerateMasterSecret(ConnectionPrivate* priv);
 Result SetupCiperSpec(ConnectionPrivate* priv);
 

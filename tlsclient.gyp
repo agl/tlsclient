@@ -108,8 +108,11 @@
       'sources': [
         'tests/gnutls-helper.cc',
       ],
+      'include_dirs': [
+        '/home/agl/src/gnutls/lib/includes',
+      ],
       'ldflags': [
-        '-L/home/agl/src/gnutls-2.8.6/lib/.libs',
+        '-L/home/agl/src/gnutls/lib/.libs',
         '-lgnutls',
         '-lgcrypt',
       ],

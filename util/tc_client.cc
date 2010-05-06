@@ -238,7 +238,7 @@ main(int argc, char **argv) {
 
   freeaddrinfo(res);
 
-  if (!sock) {
+  if (sock < 0) {
     fprintf(stderr, "Cannot connect\n");
     return 1;
   }

@@ -270,4 +270,42 @@ TEST_F(BufferTest, VariableLength2) {
   ASSERT_TRUE(memcmp(b2.Get(temp, 3), "\x01\x02\x03", 3) == 0);
 }
 
+TEST_F(BufferTest, U16) {
+  static const char kTestString[] = "\x01\x03";
+  struct iovec iov = {const_cast<char*>(kTestString), sizeof(kTestString) - 1};
+  Buffer b(&iov, 1);
+  uint16_t value;
+
+  ASSERT_TRUE(b.U16(&value));
+  ASSERT_EQ(0x103u, value);
+}
+
+TEST_F(BufferTest, TruncatedU16) {
+  static const char kTestString[] = "\x01";
+  struct iovec iov = {const_cast<char*>(kTestString), sizeof(kTestString) - 1};
+  Buffer b(&iov, 1);
+  uint16_t value;
+
+  ASSERT_FALSE(b.U16(&value));
+}
+
+TEST_F(BufferTest, U32) {
+  static const char kTestString[] = "\x01\x02\x03\x04";
+  struct iovec iov = {const_cast<char*>(kTestString), sizeof(kTestString) - 1};
+  Buffer b(&iov, 1);
+  uint32_t value;
+
+  ASSERT_TRUE(b.U32(&value));
+  ASSERT_EQ(0x1020304u, value);
+}
+
+TEST_F(BufferTest, TruncatedU32) {
+  static const char kTestString[] = "\x01";
+  struct iovec iov = {const_cast<char*>(kTestString), sizeof(kTestString) - 1};
+  Buffer b(&iov, 1);
+  uint32_t value;
+
+  ASSERT_FALSE(b.U32(&value));
+}
+
 }  // anonymous namespace

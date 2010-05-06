@@ -110,6 +110,13 @@ class Sink {
     return ret;
   }
 
+  void Copy(const void* src, size_t length) {
+    Ensure(length);
+    uint8_t* const ret = buf_->data + buf_->offset;
+    buf_->offset += length;
+    memcpy(ret, src, length);
+  }
+
   Sink Record(TLSVersion version, RecordType type) {
     U8(static_cast<uint8_t>(type));
 
