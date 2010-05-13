@@ -13,6 +13,7 @@ namespace tlsclient {
 struct ConnectionPrivate;
 class Context;
 class Buffer;
+class Sink;
 
 // Connection represents an association with a TLS peer. Initially the peer is
 // unknown and unauthenticated. As the association progresses, by reading and
@@ -193,6 +194,11 @@ class Connection {
 
  private:
   void SetEnableBit(unsigned bit, bool onoff);
+
+  Result SendClientHello(Sink*);
+  Result SendClientKeyExchange(Sink*);
+  Result SendChangeCipherSpec(Sink*);
+  Result SendFinished(Sink*);
 
   ConnectionPrivate* const priv_;
 };

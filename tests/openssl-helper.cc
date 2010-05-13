@@ -104,6 +104,11 @@ main(int argc, char **argv) {
   if (session_tickets)
     SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_BOTH);
 
+  if (snap_start) {
+    unsigned char epoch[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    SSL_CTX_set_snap_start_epoch(ctx, epoch);
+  }
+
   unsigned connection_limit = 1;
   if (snap_start || session_tickets)
     connection_limit = 2;

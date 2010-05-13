@@ -543,8 +543,52 @@ TEST_F(ConnectionTest, OpenSSLSnapStartResumeRecovery) {
   MaybePrintResult(r);
   ASSERT_EQ(0, ErrorCodeFromResult(r));
   PerformConnection(client_, &conn2);
-  ASSERT_TRUE(conn2.did_snap_start());
+  ASSERT_FALSE(conn2.did_snap_start());
   ASSERT_TRUE(conn2.did_resume());
+}
+
+TEST_F(ConnectionTest, OpenSSLSnapStartResumeRecovery2) {
+  static const char* const args[] = {kOpenSSLHelper, "snap-start-recovery", NULL};
+  Result r;
+
+  OpenSSLContext ctx;
+  Connection conn(&ctx);
+  conn.EnableDefault();
+  conn.CollectSnapStartData();
+  StartServer(args);
+  PerformConnection(client_, &conn);
+  ASSERT_FALSE(conn.did_resume());
+  ASSERT_TRUE(conn.is_snap_start_data_available());
+  ASSERT_TRUE(conn.is_resumption_data_availible());
+
+  struct iovec snap_start_data;
+  r = conn.GetSnapStartData(&snap_start_data);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+
+  struct iovec resumption_data;
+  r = conn.GetResumptionData(&resumption_data);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+
+  // We deliberately damage the resumption data to cause a double failure.
+  static_cast<uint8_t*>(resumption_data.iov_base)[100] ^= 0xff;
+
+  const struct iovec *server_certs;
+  unsigned server_certs_len;
+  r = conn.server_certificates(&server_certs, &server_certs_len);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+
+  Connection conn2(&ctx);
+  conn2.EnableDefault();
+  conn2.SetPredictedCertificates(server_certs, server_certs_len);
+  r = conn2.SetSnapStartData(static_cast<uint8_t*>(snap_start_data.iov_base), snap_start_data.iov_len);
+  MaybePrintResult(r);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+  r = conn2.SetResumptionData(static_cast<uint8_t*>(resumption_data.iov_base), resumption_data.iov_len);
+  MaybePrintResult(r);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+  PerformConnection(client_, &conn2);
+  ASSERT_FALSE(conn2.did_snap_start());
+  ASSERT_FALSE(conn2.did_resume());
 }
 
 }  // anonymous namespace

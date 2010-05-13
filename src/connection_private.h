@@ -22,7 +22,7 @@ class HandshakeHash;
 struct ConnectionPrivate {
   ConnectionPrivate(Context* in_ctx)
       : ctx(in_ctx),
-        state(SEND_PHASE_ONE),
+        state(SEND_CLIENT_HELLO),
         sslv3(false),
         cipher_suite_flags_enabled(0),
         last_buffer(NULL),
