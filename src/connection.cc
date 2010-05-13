@@ -14,8 +14,6 @@
 #include "tlsclient/src/handshake.h"
 #include "tlsclient/src/sink.h"
 
-#include <stdio.h>
-
 #if 0
 #include <stdio.h>
 static void hexdump(const void* data, size_t length) {
@@ -374,8 +372,6 @@ Result Connection::Get(struct iovec* out) {
       if (priv_->state == STATE_MUST_BRANCH)
         return ERROR_RESULT(ERR_INTERNAL_ERROR);
     }
-
-    printf("%s -> %s\n", kStateNames[prev_state], kStateNames[priv_->state]);
   }
 
   if (sink.size() == 0)

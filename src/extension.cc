@@ -14,8 +14,7 @@
 #include "tlsclient/src/crypto/fnv1a64/fnv1a64.h"
 #include "tlsclient/src/crypto/prf/prf.h"
 
-#include <stdio.h>
-
+#if 0
 static void hexdump(const void*a, size_t l) {
   const uint8_t* in = (uint8_t*)a;
   for (size_t i = 0; i < l; i++) {
@@ -24,6 +23,7 @@ static void hexdump(const void*a, size_t l) {
   }
   printf("\n");
 }
+#endif
 
 namespace tlsclient {
 
@@ -240,8 +240,6 @@ class SnapStart : public Extension {
     FNV1a64 fnv;
     priv->predicted_response.iov_base = predicted_response.Release();
     priv->predicted_response.iov_len = predicted_response.size();
-    printf("tc predicted: ");
-    hexdump(priv->predicted_response.iov_base, priv->predicted_response.iov_len);
     fnv.Update(priv->predicted_response.iov_base, priv->predicted_response.iov_len);
     uint8_t* predicted_hash = sink->Block(FNV1a64::DIGEST_SIZE);
     fnv.Final(predicted_hash);

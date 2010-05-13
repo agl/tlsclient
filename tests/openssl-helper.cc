@@ -133,7 +133,6 @@ main(int argc, char **argv) {
         fprintf(stderr, "SSL_accept failed: %d\n", err);
         return 1;
       } else {
-        fprintf(stderr, "SSL_accept ok\n");
         break;
       }
     }
@@ -156,8 +155,6 @@ main(int argc, char **argv) {
 
     SSL_shutdown(server);
     SSL_free(server);
-
-    printf("****************************\n");
   }
 
   return 0;

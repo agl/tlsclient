@@ -17,8 +17,6 @@
 #include "tlsclient/src/sink.h"
 #include "tlsclient/src/crypto/cipher_suites.h"
 
-#include <stdio.h>
-
 namespace tlsclient {
 
 // RFC 5746, section 3.3
@@ -538,6 +536,7 @@ extern const HandshakeState kNextState[] = {
   /* RECV_SNAP_START_RESUME_RECOVERY2_FINISHED */ AWAIT_HELLO_REQUEST,
 };
 
+#ifdef TLSCLIENT_DEBUG
 const char *kStateNames[] = {
   "AWAIT_HELLO_REQUEST",
   "SEND_CLIENT_HELLO",
@@ -604,6 +603,7 @@ const char *kStateNames[] = {
   "RECV_SNAP_START_RESUME_RECOVERY2_CHANGE_CIPHER_SPEC",
   "RECV_SNAP_START_RESUME_RECOVERY2_FINISHED",
 };
+#endif  // TLSCLIENT_DEBUG
 
 static void AddHandshakeMessageToVerifyHash(HandshakeHash* handshake_hash, HandshakeMessage type, Buffer* in) {
   uint8_t header[4];
@@ -686,8 +686,6 @@ Result ProcessHandshakeMessage(ConnectionPrivate* priv, HandshakeMessage type, B
     if (priv->state == STATE_MUST_BRANCH)
       return ERROR_RESULT(ERR_INTERNAL_ERROR);
   }
-
-  printf("%s -> %s\n", kStateNames[prev_state], kStateNames[priv->state]);
 
   return 0;
 }

@@ -586,6 +586,7 @@ TEST_F(HandshakeTest, ProcessServerHelloBadCompressionMethod) {
 
 TEST_F(HandshakeTest, ProcessServerHello) {
   ConnectionPrivate priv(NULL);
+  priv.state = RECV_SERVER_HELLO;
   struct iovec iov = {const_cast<uint8_t*>(kServerHelloTempl), sizeof(kServerHelloTempl)};
   Buffer buf(&iov, 1);
   priv.cipher_suite_flags_enabled = -1;
@@ -599,6 +600,7 @@ TEST_F(HandshakeTest, ProcessServerHello) {
 
 TEST_F(HandshakeTest, ProcessServerHelloNoExtensions) {
   ConnectionPrivate priv(NULL);
+  priv.state = RECV_SERVER_HELLO;
   // The last two bytes are the extensions length. We should be able to parse
   // without them.
   struct iovec iov = {const_cast<uint8_t*>(kServerHelloTempl), sizeof(kServerHelloTempl) - 2};
