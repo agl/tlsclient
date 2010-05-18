@@ -39,6 +39,7 @@
       'sources': [
         'tests/aes_unittest.cc',
         'tests/arena_unittest.cc',
+        'tests/cbc_unittest.cc',
         'tests/buffer_unittest.cc',
         'tests/error_unittest.cc',
         'tests/handshake_unittest.cc',

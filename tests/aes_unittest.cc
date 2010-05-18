@@ -23,7 +23,7 @@ struct AESTestCase {
   const char* ciphertext;
 };
 
-// Test vectors from the NIST KAT test vectors
+// The NIST KAT test vectors:
 //   http://csrc.nist.gov/groups/STM/cavp/documents/aes/KAT_AES.zip
 static const AESTestCase AES128EncryptTests[] = {
   {

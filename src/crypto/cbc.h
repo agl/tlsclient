@@ -5,6 +5,7 @@
 #ifndef TLSCLIENT_CBC_H
 #define TLSCLIENT_CBC_H
 
+#include "tlsclient/public/base.h"
 #include "tlsclient/src/buffer.h"
 #include "tlsclient/src/crypto/base.h"
 
