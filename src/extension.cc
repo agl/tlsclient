@@ -55,10 +55,11 @@ class ServerNameIndication : public Extension {
   enum {
     SNI_NAME_TYPE_HOST_NAME = 0,
     MAX_HOST_NAME = 65535,
+    EXTENSION_VALUE = 0,
   };
 
   uint16_t value() const {
-    return 0;
+    return EXTENSION_VALUE;
   }
 
   bool ShouldBeIncluded(ConnectionPrivate* priv) const {
@@ -139,9 +140,8 @@ class SnapStart : public Extension {
     // The first four bytes of the suggested server random are the same as the
     // first four of our random.
     memcpy(priv->server_random, priv->client_random, 4);
-    // The next four bytes are the server's epoch, which we currently take to
-    // be zero.
-    memset(priv->server_random + 4, 0, 8);
+    // The next eight bytes are the server's epoch.
+    memcpy(priv->server_random + 4, priv->predicted_epoch, 8);
     // And the remainder is random.
     if (!priv->ctx->RandomBytes(priv->server_random + 12, sizeof(priv->server_random) - 12))
       return ERROR_RESULT(ERR_RANDOM_BYTES_FAILED);
@@ -190,8 +190,10 @@ class SnapStart : public Extension {
 
       struct iovec trailing_iov = {const_cast<uint8_t*>(predicted + 38 + session_id_len), len - 38 - session_id_len};
       if (trailing_iov.iov_len) {
-        // The ServerHello has extensions. We need to parse them we remove the
-        // empty session tickets extension.
+        // The ServerHello has extensions. We need to parse them and remove the
+        // empty session tickets extension. Also, if we are resuming, then we
+        // need to remove any echoed SNI extension because they aren't echoed
+        // on resume.
         Sink extensions_sink(server_hello_sink.VariableLengthBlock(2));
         Buffer trailing(&trailing_iov, 1);
         bool ok;
@@ -207,9 +209,11 @@ class SnapStart : public Extension {
             return ERROR_RESULT(ERR_INTERNAL_ERROR);
 
           if (priv->have_session_ticket_to_present &&
-              extension_type == SessionTicket::EXTENSION_VALUE) {
+              (extension_type == SessionTicket::EXTENSION_VALUE ||
+               extension_type == ServerNameIndication::EXTENSION_VALUE)) {
             continue;
           }
+
           extensions_sink.U16(extension_type);
           extensions_sink.U16(extension.remaining());
           uint8_t* d = extensions_sink.Block(extension.remaining());
@@ -248,6 +252,9 @@ class SnapStart : public Extension {
   }
 
   Result Process(Buffer* extension, ConnectionPrivate* priv) const {
+    if (!extension->Read(priv->server_epoch, sizeof(priv->server_epoch)))
+      return ERROR_RESULT(ERR_INVALID_HANDSHAKE_MESSAGE);
+
     priv->server_supports_snap_start = true;
     return 0;
   }

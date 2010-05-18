@@ -54,7 +54,6 @@ struct ConnectionPrivate {
         have_session_ticket_to_present(false),
         expecting_session_ticket(false) {
     sent_client_hello.iov_base = 0;
-    sent_client_key_exchange.iov_base = 0;
     server_verify.iov_base = 0;
     server_verify.iov_len = 0;
   }
@@ -76,7 +75,6 @@ struct ConnectionPrivate {
   // allocated via |arena|.
   uint8_t* last_buffer;
   struct iovec sent_client_hello;
-  struct iovec sent_client_key_exchange;
   // This is true if we have established a common TLS version in |version|
   bool version_established;
   TLSVersion version;
@@ -148,6 +146,7 @@ struct ConnectionPrivate {
   bool server_supports_snap_start;
   bool snap_start_data_available;
   struct iovec snap_start_server_hello;
+  uint8_t server_epoch[8];
 
   // The peer's expected certificates in wire format and wire order.
   std::vector<struct iovec> predicted_certificates;
@@ -159,6 +158,7 @@ struct ConnectionPrivate {
   TLSVersion predicted_server_version;
   // This is the server's predicted handshake reply at the handshake level
   // (i.e. doesn't include record headers).
+  uint8_t predicted_epoch[8];
   struct iovec predicted_server_hello;
   struct iovec predicted_response;
   // If the server rejected our snap-start then this is true.

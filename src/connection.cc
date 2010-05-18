@@ -73,6 +73,7 @@ bool Connection::need_to_write() const {
   case SEND_SNAP_START_CHANGE_CIPHER_SPEC:
   case SEND_SNAP_START_FINISHED:
   case SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC_REVERT:
+  case SEND_SNAP_START_RECOVERY_CLIENT_KEY_EXCHANGE:
   case SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC:
   case SEND_SNAP_START_RECOVERY_FINISHED:
   case SEND_SNAP_START_RECOVERY_RETRANSMIT:
@@ -106,6 +107,12 @@ bool Connection::is_ready_to_send_application_data() const {
 }
 
 Result Connection::server_certificates(const struct iovec** out_iovs, unsigned* out_len) {
+  if (priv_->server_certificates.size() == 0 && priv_->predicted_certificates.size()) {
+    *out_iovs = &priv_->predicted_certificates[0];
+    *out_len = priv_->server_certificates.size();
+    return 0;
+  }
+
   *out_iovs = &priv_->server_certificates[0];
   *out_len = priv_->server_certificates.size();
   return 0;
@@ -203,10 +210,6 @@ Result Connection::SendClientKeyExchange(Sink* sink) {
       return r;
   }
 
-  priv_->sent_client_key_exchange.iov_len = s.size();
-  priv_->sent_client_key_exchange.iov_base = priv_->arena.Allocate(priv_->sent_client_key_exchange.iov_len);
-  memcpy(priv_->sent_client_key_exchange.iov_base, s.data(), priv_->sent_client_key_exchange.iov_len);
-
   priv_->handshake_hash->Update(s.data(), s.size());
   if ((r = EncryptRecord(priv_, &s)))
     return r;
@@ -277,6 +280,7 @@ Result Connection::Get(struct iovec* out) {
       break;
     case SEND_CLIENT_KEY_EXCHANGE:
     case SEND_SNAP_START_CLIENT_KEY_EXCHANGE:
+    case SEND_SNAP_START_RECOVERY_CLIENT_KEY_EXCHANGE:
     case SEND_SNAP_START_RESUME_RECOVERY2_CLIENT_KEY_EXCHANGE:
       r = SendClientKeyExchange(&sink);
       if ((r = GenerateMasterSecret(priv_)))
@@ -551,10 +555,8 @@ bool Connection::is_resumption_data_availible() const {
 Result Connection::GetResumptionData(struct iovec* iov) {
   Sink sink(&priv_->arena);
 
-  if (priv_->state != AWAIT_HELLO_REQUEST ||
-      (priv_->session_id_len == 0 && !priv_->expecting_session_ticket)) {
+  if (!priv_->resumption_data_ready)
     return ERROR_RESULT(ERR_RESUMPTION_DATA_NOT_READY);
-  }
 
   sink.U8(kResumptionSerialisationVersion);
   sink.U16(priv_->cipher_suite->value);
@@ -681,7 +683,7 @@ bool Connection::is_snap_start_data_available() const {
   return priv_->snap_start_data_available;
 }
 
-static const uint8_t kSnapStartSerialisationVersion = 0;
+static const uint8_t kSnapStartSerialisationVersion = 1;
 
 Result Connection::GetSnapStartData(struct iovec* iov) {
   Sink sink(&priv_->arena);
@@ -693,6 +695,7 @@ Result Connection::GetSnapStartData(struct iovec* iov) {
 
   sink.U16(static_cast<uint16_t>(priv_->version));
   sink.U16(static_cast<uint16_t>(priv_->cipher_suite->value));
+  sink.Copy(priv_->server_epoch, sizeof(priv_->server_epoch));
 
   {
     Sink server_hello_sink(sink.VariableLengthBlock(2));
@@ -742,6 +745,9 @@ Result Connection::SetSnapStartData(const uint8_t* data, size_t len) {
     return ERROR_RESULT(ERR_RESUME_CIPHER_SUITE_NOT_FOUND);
 
   priv_->cipher_suite = cipher_suite;
+
+  if (!buf.Read(priv_->predicted_epoch, sizeof(priv_->predicted_epoch)))
+    return ERROR_RESULT(ERR_CANNOT_PARSE_SNAP_START_DATA);
 
   Buffer server_hello_buf(buf.VariableLength(&ok, 2));
   if (!ok)

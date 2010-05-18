@@ -17,6 +17,17 @@ void FNV1a64::Init() {
   s_ = kOffsetBasis;
 }
 
+#if 0
+static void hexdump(const void*a, unsigned len) {
+  const uint8_t* in = (uint8_t*) a;
+  for (unsigned i = 0; i < len; i++) {
+    printf("%x", in[i] >> 4);
+    printf("%x", in[i] & 15);
+  }
+  printf("\n");
+}
+#endif
+
 void FNV1a64::Update(const void* data, size_t length) {
   const uint8_t* d = reinterpret_cast<const uint8_t*>(data);
 

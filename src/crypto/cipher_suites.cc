@@ -212,5 +212,4 @@ bool CompareBytes(const uint8_t* a, const uint8_t* b, unsigned len) {
   return v == 0;
 }
 
-
 }  // namespace tlsclient

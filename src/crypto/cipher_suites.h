@@ -2,6 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifndef TLSCLIENT_CIPHERSUITES_H
+#define TLSCLIENT_CIPHERSUITES_H
+
 #include "tlsclient/public/base.h"
 #include "tlsclient/src/handshake.h"
 
@@ -71,3 +74,5 @@ const CipherSuite *AllCipherSuites();
 bool CompareBytes(const uint8_t* a, const uint8_t* b, unsigned len);
 
 }  // namespace tlsclient
+
+#endif // !TLSCLIENT_CIPHERSUITES_H

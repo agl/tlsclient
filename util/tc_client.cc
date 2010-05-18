@@ -22,6 +22,8 @@
 #include "tlsclient/public/error.h"
 #include "tlsclient/tests/openssl-context.h"
 
+#include "tlsclient/src/buffer.h"
+
 #include <openssl/err.h>
 #include <openssl/evp.h>
 
@@ -57,6 +59,26 @@ static int fatal_result(tlsclient::Result r) {
   tlsclient::FilenameFromResult(filename, r);
   fprintf(stderr, "libtlsclient error: %s:%d %s\n", filename, tlsclient::LineNumberFromResult(r), tlsclient::StringFromResult(r));
   return 1;
+}
+
+static int fatal_error(const char* err) {
+  fprintf(stderr, "fatal error: %s\n", err);
+  return 1;
+}
+
+static bool writeU16(int fd, uint16_t v) {
+  uint8_t out[2];
+  out[0] = v >> 8;
+  out[1] = v;
+  return write(fd, out, sizeof(out)) == sizeof(out);
+}
+
+static bool writeU24(int fd, uint32_t v) {
+  uint8_t out[3];
+  out[0] = v >> 16;
+  out[1] = v >> 8;
+  out[2] = v;
+  return write(fd, out, sizeof(out)) == sizeof(out);
 }
 
 struct Buffer {
@@ -168,9 +190,24 @@ main(int argc, char **argv) {
 
   const char *hostname_str = NULL;
   const char *port_str = NULL;
+  const char *resume_state = NULL;
+  const char *snap_start_state = NULL;
+  bool false_start = false;
 
   for (unsigned i = 1; argv[i]; i++) {
-    if (!hostname_str) {
+    if (strcmp(argv[i], "--false-start") == 0) {
+      false_start = true;
+    } else if (strcmp(argv[i], "--resume-state") == 0) {
+      i++;
+      resume_state = argv[i];
+      if (!resume_state)
+        return usage(argv[0]);
+    } else if (strcmp(argv[i], "--snap-start-state") == 0) {
+      i++;
+      snap_start_state = argv[i];
+      if (!snap_start_state)
+        return usage(argv[0]);
+    } else if (!hostname_str) {
       hostname_str = argv[i];
     } else if (!port_str) {
       port_str = argv[i];
@@ -249,6 +286,69 @@ main(int argc, char **argv) {
   tlsclient::Connection conn(&context);
   conn.set_host_name(hostname_str);
   conn.EnableDefault();
+  conn.EnableFalseStart(false_start);
+  conn.set_host_name(hostname_str);
+
+  if (resume_state) {
+    const int fd = open(resume_state, O_RDONLY);
+    if (fd >= 0) {
+      struct stat st;
+      fstat(fd, &st);
+      uint8_t* buffer = static_cast<uint8_t*>(malloc(st.st_size));
+      read(fd, buffer, st.st_size);
+      close(fd);
+
+      tlsclient::Result r = conn.SetResumptionData(buffer, st.st_size);
+      free(buffer);
+      if (r)
+        return fatal_result(r);
+      fprintf(stderr, " - set resumption data\n");
+    }
+  }
+
+  if (snap_start_state) {
+    const int fd = open(snap_start_state, O_RDONLY);
+    if (fd >= 0) {
+      struct stat st;
+      fstat(fd, &st);
+      uint8_t* buffer = static_cast<uint8_t*>(malloc(st.st_size));
+      read(fd, buffer, st.st_size);
+      close(fd);
+
+      const struct iovec iov = {buffer, st.st_size};
+      tlsclient::Buffer buf(&iov, 1);
+
+      uint16_t num_certs;
+      if (!buf.U16(&num_certs))
+        return fatal_error("failed to parse snap start data");
+
+      std::vector<struct iovec> certs;
+
+      for (unsigned i = 0; i < num_certs; i++) {
+        bool ok;
+        tlsclient::Buffer certbuf(buf.VariableLength(&ok, 3));
+        if (!ok)
+          return fatal_error("failed to parse snap start data");
+        size_t cert_len = certbuf.remaining();
+        uint8_t* bytes = certbuf.Get(NULL, cert_len);
+        struct iovec cert = {bytes, cert_len};
+        certs.push_back(cert);
+      }
+
+      conn.SetPredictedCertificates(&certs[0], certs.size());
+
+      size_t snap_start_data_len = buf.remaining();
+      uint8_t* bytes = buf.Get(NULL, snap_start_data_len);
+
+      tlsclient::Result r = conn.SetSnapStartData(bytes, snap_start_data_len);
+      free(buffer);
+      if (r)
+        return fatal_result(r);
+      fprintf(stderr, " - set snap start data\n");
+    } else {
+      conn.CollectSnapStartData();
+    }
+  }
 
   const int efd = epoll_create(2);
   if (efd < 0) {
@@ -264,7 +364,7 @@ main(int argc, char **argv) {
 
   ev.events = EPOLLOUT | EPOLLET;
   ev.data.fd = 1;
-  //epoll_ctl(efd, EPOLL_CTL_ADD, 1, &ev);
+  epoll_ctl(efd, EPOLL_CTL_ADD, 1, &ev);
 
   ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
   ev.data.fd = sock;
@@ -281,6 +381,8 @@ main(int argc, char **argv) {
   Buffer q_out;
 
   bool have_printed_cipher_suite = false;
+  bool have_printed_did_resume = false;
+  bool have_printed_did_snap_start = false;
 
   for (;;) {
     bool did_something = false;
@@ -306,9 +408,62 @@ main(int argc, char **argv) {
         ready_sock_out = false;
     }
 
+    if (resume_state && conn.is_resumption_data_availible()) {
+      struct iovec resume_data;
+      tlsclient::Result r = conn.GetResumptionData(&resume_data);
+      if (r)
+        return fatal_result(r);
+      fprintf(stderr, " - writing %u bytes of resume data out\n", (unsigned) resume_data.iov_len);
+      const int fd = open(resume_state, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+      if (fd < 0)
+        return fatal_error("failed to open resume state file for output");
+      write(fd, resume_data.iov_base, resume_data.iov_len);
+      close(fd);
+
+      resume_state = NULL;
+    }
+
+    if (snap_start_state && conn.is_snap_start_data_available()) {
+      struct iovec snap_start_data;
+      tlsclient::Result r = conn.GetSnapStartData(&snap_start_data);
+      if (r)
+        return fatal_result(r);
+      fprintf(stderr, " - writing snap start data out\n");
+
+      const int fd = open(snap_start_state, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+      if (fd < 0)
+        return fatal_error("failed to open snap start state file for output");
+
+      const struct iovec* certs;
+      unsigned num_certs;
+      r = conn.server_certificates(&certs, &num_certs);
+      if (r)
+        return fatal_result(r);
+
+      writeU16(fd, num_certs);
+      for (unsigned i = 0; i < num_certs; i++) {
+        writeU24(fd, certs[i].iov_len);
+        write(fd, certs[i].iov_base, certs[i].iov_len);
+      }
+
+      write(fd, snap_start_data.iov_base, snap_start_data.iov_len);
+      close(fd);
+      snap_start_state = NULL;
+    }
+
     if (!have_printed_cipher_suite && conn.is_ready_to_send_application_data()) {
       fprintf(stderr, " - using %s\n", conn.cipher_suite_name());
       have_printed_cipher_suite = true;
+    }
+
+    if (!have_printed_did_resume && conn.did_resume()) {
+      fprintf(stderr, " - did resume\n");
+      have_printed_did_resume = true;
+    }
+
+    if (!have_printed_did_snap_start && conn.did_snap_start()) {
+      fprintf(stderr, " - did snap start\n");
+      have_printed_did_snap_start = true;
     }
 
     if (!q_out.size() && conn.need_to_write() && ready_sock_out) {

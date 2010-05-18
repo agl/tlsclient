@@ -19,6 +19,7 @@
         'src/extension.cc',
         'src/handshake.cc',
         'src/record.cc',
+        'src/crypto/aes/aes.cc',
         'src/crypto/cipher_suites.cc',
         'src/crypto/fnv1a64/fnv1a64.cc',
         'src/crypto/md5/md5.cc',
@@ -36,6 +37,7 @@
         '..',
       ],
       'sources': [
+        'tests/aes_unittest.cc',
         'tests/arena_unittest.cc',
         'tests/buffer_unittest.cc',
         'tests/error_unittest.cc',

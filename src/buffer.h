@@ -198,6 +198,41 @@ class Buffer {
     return false;
   }
 
+  bool Write(void* in, size_t len) {
+    uint8_t* i = static_cast<uint8_t*>(in);
+    Pos pos(pos_);
+
+    // This is pretty much a duplication of Read().
+
+    while (len && pos.i < len_) {
+      size_t bytes_to_write = iov_[pos.i].iov_len - pos.offset;
+      if (bytes_to_write > len)
+        bytes_to_write = len;
+      memcpy(static_cast<uint8_t*>(iov_[pos.i].iov_base) + pos.offset, i, bytes_to_write);
+      i += bytes_to_write;
+      len -= bytes_to_write;
+
+      if (len) {
+        pos.i++;
+        pos.offset = 0;
+      } else {
+        pos.offset += bytes_to_write;
+        if (pos.offset == iov_[pos.i].iov_len) {
+          pos.i++;
+          pos.offset = 0;
+        }
+        break;
+      }
+    }
+
+    if (len == 0) {
+      pos_ = pos;
+      return true;
+    }
+
+    return false;
+  }
+
   uint8_t* Get(uint8_t* out, size_t len) {
     if (pos_.i == len_)
       return NULL;

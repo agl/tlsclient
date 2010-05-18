@@ -344,8 +344,8 @@ Result GenerateMasterSecret(ConnectionPrivate* priv) {
   if (!MasterSecretFromPreMasterSecret(priv->master_secret, priv->version, priv->premaster_secret, sizeof(priv->premaster_secret), priv->client_random, priv->server_random))
     return ERROR_RESULT(ERR_INTERNAL_ERROR);
 
-  // FIXME: really? Is this true with session tickets?
-  priv->resumption_data_ready = true;
+  if (!priv->expecting_session_ticket)
+    priv->resumption_data_ready = true;
   return 0;
 }
 
@@ -435,6 +435,7 @@ static const HandshakeMessage kPermittedHandshakeMessagesPerState[][2] = {
   /* RECV_SNAP_START_RECOVERY_CERTIFICATE */ { CERTIFICATE, INVALID_MESSAGE },
   /* RECV_SNAP_START_RECOVERY_SERVER_HELLO_DONE */ { SERVER_HELLO_DONE, INVALID_MESSAGE },
   /* SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC_REVERT */ { INVALID_MESSAGE },
+  /* SEND_SNAP_START_RECOVERY_CLIENT_KEY_EXCHANGE */ { INVALID_MESSAGE },
   /* SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC */ { INVALID_MESSAGE },
   /* SEND_SNAP_START_RECOVERY_FINISHED */ { INVALID_MESSAGE },
   /* SEND_SNAP_START_RECOVERY_RETRANSMIT */ { INVALID_MESSAGE },
@@ -501,7 +502,8 @@ extern const HandshakeState kNextState[] = {
 
   /* RECV_SNAP_START_RECOVERY_CERTIFICATE */ RECV_SNAP_START_RECOVERY_SERVER_HELLO_DONE,
   /* RECV_SNAP_START_RECOVERY_SERVER_HELLO_DONE */ SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC_REVERT,
-  /* SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC_REVERT */ SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC,
+  /* SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC_REVERT */ SEND_SNAP_START_RECOVERY_CLIENT_KEY_EXCHANGE,
+  /* SEND_SNAP_START_RECOVERY_CLIENT_KEY_EXCHANGE */ SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC,
   /* SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC */ SEND_SNAP_START_RECOVERY_FINISHED,
   /* SEND_SNAP_START_RECOVERY_FINISHED */ SEND_SNAP_START_RECOVERY_RETRANSMIT,
   /* SEND_SNAP_START_RECOVERY_RETRANSMIT */ STATE_MUST_BRANCH,
@@ -570,6 +572,7 @@ const char *kStateNames[] = {
   "RECV_SNAP_START_RECOVERY_CERTIFICATE",
   "RECV_SNAP_START_RECOVERY_SERVER_HELLO_DONE",
   "SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC_REVERT",
+  "SEND_SNAP_START_RECOVERY_CLIENT_KEY_EXCHANGE",
   "SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC",
   "SEND_SNAP_START_RECOVERY_FINISHED",
   "SEND_SNAP_START_RECOVERY_RETRANSMIT",
@@ -714,6 +717,7 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
       // Snap start accepted.
       priv->recording_application_data = false;
       priv->did_snap_start = true;
+
       if (priv->state == RECV_SNAP_START_RESUME_SERVER_HELLO) {
         priv->did_resume = true;
         priv->state = RECV_SNAP_START_RESUME_CHANGE_CIPHER_SPEC;
@@ -727,6 +731,7 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
     // we need to perform snap start recovery.
     priv->server_verify.iov_base = NULL;
     priv->server_verify.iov_len = 0;
+    priv->expecting_session_ticket = false;
 
     if (priv->write_cipher_spec)
       priv->write_cipher_spec->DecRef();
@@ -808,7 +813,9 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
     // We don't know if we're going to get a session ticket until we have
     // processes the extensions so we set the next state below.
     priv->did_resume = true;
-    priv->resumption_data_ready = true;
+    // This will be flipped back to false if we find a session tickets
+    // extension.
+    priv->resumption_data_ready = !priv->have_session_ticket_to_present;
   } else if (priv->state == RECV_SERVER_HELLO) {
     priv->state = RECV_CERTIFICATE;
   } else if (priv->state == RECV_SNAP_START_SERVER_HELLO) {
@@ -910,27 +917,6 @@ Result ProcessServerHelloDone(ConnectionPrivate* priv, Buffer* in) {
   if (priv->server_supports_snap_start && priv->collect_snap_start)
     priv->snap_start_data_available = true;
 
-  if (priv->state == RECV_SNAP_START_RECOVERY_SERVER_HELLO_DONE) {
-    // We restarted the handshake calculation because we entered recovery. The
-    // server still processed the ClientKeyExchange message that we sent,
-    // however, so we need to add it to the handshake hash.
-    priv->handshake_hash->Update(priv->sent_client_key_exchange.iov_base, priv->sent_client_key_exchange.iov_len);
-  }
-
-#if 0
-  if (priv->state == RECV_SNAP_START_SERVER_HELLO_DONE) {
-    if (priv->expecting_session_ticket) {
-      priv->state = RECV_SNAP_START_SESSION_TICKET;
-    } else {
-      priv->state = RECV_SNAP_START_CHANGE_CIPHER_SPEC;
-    }
-  } else if (priv->snap_start_recovery) {
-    priv->state = SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC_REVERT;
-  } else {
-    priv->state = SEND_CLIENT_KEY_EXCHANGE;
-  }
-#endif
-
   return 0;
 }
 
@@ -996,6 +982,7 @@ Result ProcessSessionTicket(ConnectionPrivate* priv, Buffer* in) {
     return ERROR_RESULT(ERR_INTERNAL_ERROR);
 
   priv->resumption_data_ready = true;
+  priv->session_id_len = 0;
 
   if (priv->state == RECV_SESSION_TICKET) {
     priv->state = RECV_CHANGE_CIPHER_SPEC;
