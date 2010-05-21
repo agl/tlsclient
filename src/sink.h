@@ -26,7 +26,8 @@ class Sink {
         buf_(&b_),
         initial_offset_(0),
         length_size_(0),
-        length_offset_(0) {
+        length_offset_(0),
+        parent_(NULL) {
     b_.data = static_cast<uint8_t*>(a->Allocate(kDefaultSize));
     b_.length = kDefaultSize;
     b_.offset = 0;
@@ -41,12 +42,15 @@ class Sink {
     }
   }
 
-  void WriteLength() {
+  void WriteLength(bool recurse = false) {
     const size_t written = buf_->offset - length_offset_ - length_size_;
 
     for (unsigned i = 0; i < length_size_; i++) {
       buf_->data[length_offset_ + i] = written >> (8 * (length_size_ - i - 1));
     }
+
+    if (recurse && parent_)
+      parent_->WriteLength(recurse);
   }
 
   uint8_t* Release() {
@@ -62,7 +66,8 @@ class Sink {
     buf_(other.buf_),
     initial_offset_(other.initial_offset_),
     length_size_(0),
-    length_offset_(0) {
+    length_offset_(0),
+    parent_(other.parent_) {
   }
 
   Sink VariableLengthBlock(unsigned length_prefix_size) {
@@ -154,13 +159,24 @@ class Sink {
     return buf_->offset - initial_offset_;
   }
 
+  // The raw versions of the above functions return the full buffer, even in a
+  // child Sink.
+  const uint8_t* raw_data() const {
+    return buf_->data;
+  }
+
+  size_t raw_size() const {
+    return buf_->offset;
+  }
+
  private:
   Sink(Sink* parent, unsigned length_size)
       : arena_(parent->arena_),
         buf_(parent->buf_),
         initial_offset_(buf_->offset),
         length_size_(length_size),
-        length_offset_(parent->buf_->offset - length_size) {
+        length_offset_(parent->buf_->offset - length_size),
+        parent_(parent) {
   }
 
   void Ensure(size_t n) {
@@ -179,6 +195,7 @@ class Sink {
   const unsigned length_size_;
   const size_t length_offset_;
   Buf b_;
+  Sink* const parent_;
 };
 
 }  // namespace tlsclient

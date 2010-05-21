@@ -25,6 +25,7 @@ class HandshakeHash {
  public:
   virtual ~HandshakeHash() { }
 
+  virtual unsigned Length() const = 0;
   virtual void Update(const void* data, size_t length) = 0;
   virtual const uint8_t* ClientVerifyData(unsigned* out_size, const uint8_t* master_secret, size_t master_secret_len) = 0;
   virtual const uint8_t* ServerVerifyData(unsigned* out_size, const uint8_t* master_secret, size_t master_secret_len) = 0;

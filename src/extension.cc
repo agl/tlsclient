@@ -15,6 +15,7 @@
 #include "tlsclient/src/crypto/prf/prf.h"
 
 #if 0
+#include <stdio.h>
 static void hexdump(const void*a, size_t l) {
   const uint8_t* in = (uint8_t*)a;
   for (size_t i = 0; i < l; i++) {
@@ -26,6 +27,22 @@ static void hexdump(const void*a, size_t l) {
 #endif
 
 namespace tlsclient {
+
+struct Extension {
+ public:
+  // Called to see if this extension should be included.
+  virtual bool ShouldBeIncluded(ConnectionPrivate* priv) const = 0;
+  // NeedConsistentClientHello returns true if the Sink passed to |Marshal|
+  // needs to contain a valid ClientHello message. Specifically, this will
+  // cause the lengths to be updated to a state prior to this extension being
+  // serialised (although the type and length of this extension will have been
+  // appended).
+  virtual bool NeedConsistentClientHello() const { return false; }
+  virtual Result Marshal(Sink* sink, ConnectionPrivate* priv) const = 0;
+  virtual Result Process(Buffer* extension, ConnectionPrivate* priv) const = 0;
+  // The IANA assigned extension number.
+  virtual uint16_t value() const = 0;
+};
 
 class RenegotiationInfo : public Extension {
  public:
@@ -133,14 +150,41 @@ class SnapStart : public Extension {
     return true;
   }
 
+  bool NeedConsistentClientHello() const {
+    return true;
+  }
+
   Result Marshal(Sink* sink, ConnectionPrivate* priv) const {
+    Result r;
+
     if (!priv->snap_start_attempt)
       return 0;
+
+    priv->handshake_hash = HandshakeHashForVersion(priv->predicted_server_version);
+    if (!priv->handshake_hash)
+      return ERROR_RESULT(ERR_INTERNAL_ERROR);
+
+    // In the event of a snap start, the Finished hash is calculated over the
+    // contents of the ClientHello with this extension omittied. Because we are
+    // the last extension to be serialised, we can just hash a prefix of the
+    // ClientHello as long as the embedded lengths are correct.
+    //
+    // Because we returned true in |NeedConsistentClientHello| all the lengths
+    // of the ClientHello will have been set before we started writing out this
+    // extension.
+    //
+    // Now we use the raw_ members of the sink to get the contents of the full
+    // record. There will be 5 bytes of record header at the beginning which we
+    // need to skip as well as 4 bytes of extension type and extension length
+    // which were written out after syncing the embedded lengths.
+    const uint8_t* const raw_data = sink->raw_data();
+    const size_t raw_size = sink->raw_size();
+    priv->handshake_hash->Update(raw_data + 5, raw_size - (5 + 4));
 
     // The first four bytes of the suggested server random are the same as the
     // first four of our random.
     memcpy(priv->server_random, priv->client_random, 4);
-    // The next eight bytes are the server's epoch.
+    // The next eight bytes are the server's orbit.
     memcpy(priv->server_random + 4, priv->predicted_epoch, 8);
     // And the remainder is random.
     if (!priv->ctx->RandomBytes(priv->server_random + 12, sizeof(priv->server_random) - 12))
@@ -151,8 +195,84 @@ class SnapStart : public Extension {
     uint8_t* server_random = sink->Block(sizeof(priv->server_random) - 4);
     memcpy(server_random, priv->server_random + 4, sizeof(priv->server_random) - 4);
 
+    // Now we predict the server's response and include a hash of that to let
+    // the server know if we got it right.
     Sink predicted_response(&priv->arena);
+    if ((r = BuildPredictedResponse(&predicted_response, priv)))
+      return r;
 
+    FNV1a64 fnv;
+    priv->predicted_response.iov_base = predicted_response.Release();
+    priv->predicted_response.iov_len = predicted_response.size();
+
+    fnv.Update(priv->predicted_response.iov_base, priv->predicted_response.iov_len);
+    uint8_t* predicted_hash = sink->Block(FNV1a64::DIGEST_SIZE);
+    fnv.Final(predicted_hash);
+
+    // The handshake hash includes the predicted response:
+    priv->handshake_hash->Update(priv->predicted_response.iov_base, priv->predicted_response.iov_len);
+
+    // If we are predicting a resume handshake, then we need to include the
+    // server's predicted Finished message at this point.
+    if (!priv->expecting_session_ticket) {
+      unsigned verify_data_size;
+      const uint8_t* verify_data = priv->handshake_hash->ServerVerifyData(&verify_data_size, priv->master_secret, sizeof(priv->master_secret));
+      // We need to remember the contents of the verify_data so that we can
+      // validate it when we receive it.
+      priv->server_verify.iov_base = priv->arena.Allocate(verify_data_size);
+      memcpy(priv->server_verify.iov_base, verify_data, verify_data_size);
+      priv->server_verify.iov_len = verify_data_size;
+
+      uint8_t handshake_header[4];
+      handshake_header[0] = static_cast<uint8_t>(FINISHED);
+      handshake_header[1] = handshake_header[2] = 0;
+      handshake_header[3] = verify_data_size;
+
+      priv->handshake_hash->Update(handshake_header, sizeof(handshake_header));
+      priv->handshake_hash->Update(verify_data, verify_data_size);
+    }
+
+    // Now come the opportunistic records
+    if (priv->expecting_session_ticket) {
+      priv->state = SEND_SNAP_START_CLIENT_KEY_EXCHANGE;
+    } else {
+      priv->state = SEND_SNAP_START_RESUME_CHANGE_CIPHER_SPEC;
+      SetupCiperSpec(priv);
+    }
+
+    if ((r = SendHandshakeMessages(sink, priv)))
+      return r;
+
+    struct iovec start, end, iov;
+    // We need to make a copy of the application data to be sent because we'll
+    // be encrypting in place and we might need to retransmit it later.
+    iov.iov_len = priv->snap_start_application_data.iov_len;
+    iov.iov_base = static_cast<uint8_t*>(priv->arena.Allocate(iov.iov_len));
+    memcpy(iov.iov_base, priv->snap_start_application_data.iov_base, iov.iov_len);
+
+    if ((r = EncryptApplicationData(&start, &end, &iov, 1, iov.iov_len, priv)))
+      return r;
+
+    // |start| includes the record header.
+    sink->Copy(start.iov_base, start.iov_len);
+    sink->Copy(iov.iov_base, iov.iov_len);
+    sink->Copy(end.iov_base, end.iov_len);
+
+    priv->arena.Free(iov.iov_base);
+
+    return 0;
+  }
+
+  Result Process(Buffer* extension, ConnectionPrivate* priv) const {
+    if (!extension->Read(priv->server_epoch, sizeof(priv->server_epoch)))
+      return ERROR_RESULT(ERR_INVALID_HANDSHAKE_MESSAGE);
+
+    priv->server_supports_snap_start = true;
+    return 0;
+  }
+
+ private:
+  static Result BuildPredictedResponse(Sink* predicted_response, ConnectionPrivate* priv) {
     {
       const uint8_t* predicted = static_cast<uint8_t*>(priv->predicted_server_hello.iov_base);
       const size_t len = priv->predicted_server_hello.iov_len;
@@ -161,7 +281,7 @@ class SnapStart : public Extension {
       if (len < 38)
         return ERROR_RESULT(ERR_INTERNAL_ERROR);
 
-      Sink server_hello_sink(predicted_response.HandshakeMessage(SERVER_HELLO));
+      Sink server_hello_sink(predicted_response->HandshakeMessage(SERVER_HELLO));
       server_hello_sink.Copy(predicted, 2);
       server_hello_sink.Copy(priv->server_random, sizeof(priv->server_random));
       // We need to make sure that the server doesn't include a random session id
@@ -228,7 +348,7 @@ class SnapStart : public Extension {
     priv->server_cert = priv->ctx->ParseCertificate(static_cast<uint8_t*>(priv->predicted_certificates[0].iov_base), priv->predicted_certificates[0].iov_len);
 
     if (!priv->have_session_ticket_to_present) {
-      Sink cert_msg_sink(predicted_response.HandshakeMessage(CERTIFICATE));
+      Sink cert_msg_sink(predicted_response->HandshakeMessage(CERTIFICATE));
       Sink certs_sink(cert_msg_sink.VariableLengthBlock(3));
 
       for (std::vector<struct iovec>::const_iterator i = priv->predicted_certificates.begin(); i != priv->predicted_certificates.end(); i++) {
@@ -239,23 +359,8 @@ class SnapStart : public Extension {
     }
 
     if (!priv->have_session_ticket_to_present)
-      predicted_response.HandshakeMessage(SERVER_HELLO_DONE);
+      predicted_response->HandshakeMessage(SERVER_HELLO_DONE);
 
-    FNV1a64 fnv;
-    priv->predicted_response.iov_base = predicted_response.Release();
-    priv->predicted_response.iov_len = predicted_response.size();
-    fnv.Update(priv->predicted_response.iov_base, priv->predicted_response.iov_len);
-    uint8_t* predicted_hash = sink->Block(FNV1a64::DIGEST_SIZE);
-    fnv.Final(predicted_hash);
-
-    return 0;
-  }
-
-  Result Process(Buffer* extension, ConnectionPrivate* priv) const {
-    if (!extension->Read(priv->server_epoch, sizeof(priv->server_epoch)))
-      return ERROR_RESULT(ERR_INVALID_HANDSHAKE_MESSAGE);
-
-    priv->server_supports_snap_start = true;
     return 0;
   }
 };
@@ -269,12 +374,15 @@ static const Extension* kExtensions[] = {
   &g_renegotiation_info,
   &g_sni,
   &g_session_ticket,
-  &g_snap_start,
+  &g_snap_start,  // must be last in the list.
 };
 
 static Result MaybeIncludeExtension(const Extension* ext, Sink *sink, ConnectionPrivate* priv) {
   if (!ext->ShouldBeIncluded(priv))
     return 0;
+
+  if (ext->NeedConsistentClientHello())
+    sink->WriteLength(true /* recurse */);
 
   sink->U16(ext->value());
   Sink s(sink->VariableLengthBlock(2));

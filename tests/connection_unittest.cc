@@ -119,7 +119,9 @@ static void MaybePrintResult(Result r) {
   fprintf(stderr, "%s:%d %s\n", filename, LineNumberFromResult(r), StringFromResult(r));
 }
 
-static void PerformConnection(const int fd, Connection* conn) {
+static const uint8_t kMsg[] = {'h', 'e', 'l', 'l', 'o', '!'};
+
+static void PerformConnection(const int fd, Connection* conn, bool is_snap_start = false) {
   Result r;
 
   ASSERT_TRUE(conn->need_to_write());
@@ -129,9 +131,10 @@ static void PerformConnection(const int fd, Connection* conn) {
 
   Arena arena;
   std::vector<struct iovec> iovs;
-  bool sent = false;
+  bool sent = is_snap_start;
   bool corked = false;
   int buffer_length = 0;
+  bool have_echo = false;
 
   for (;;) {
     if (conn->need_to_write()) {
@@ -149,9 +152,10 @@ static void PerformConnection(const int fd, Connection* conn) {
 
     if (conn->is_ready_to_send_application_data() && !sent) {
       struct iovec iov[3];
-      char kMsg[] = "hello!";
-      iov[1].iov_base = kMsg;
-      iov[1].iov_len = sizeof(kMsg) - 1;
+      uint8_t msg[sizeof(kMsg)];
+      memcpy(msg, kMsg, sizeof(kMsg));
+      iov[1].iov_base = msg;
+      iov[1].iov_len = sizeof(msg);
       r = conn->Encrypt(&iov[0], &iov[2], &iov[1], 1);
       ASSERT_EQ(0, ErrorCodeFromResult(r));
       writev(fd, iov, 3);
@@ -200,10 +204,13 @@ static void PerformConnection(const int fd, Connection* conn) {
         ASSERT_TRUE(buf.Read(s, 8));
         s[8] = 0;
         ASSERT_STREQ("goodbye!", s);
+        have_echo = true;
       }
 
-      if (ErrorCodeFromResult(r) == ERR_ALERT_CLOSE_NOTIFY)
+      if (ErrorCodeFromResult(r) == ERR_ALERT_CLOSE_NOTIFY) {
+        ASSERT_TRUE(have_echo);
         return;
+      }
       MaybePrintResult(r);
       ASSERT_EQ(0, ErrorCodeFromResult(r));
 
@@ -402,6 +409,7 @@ TEST_F(ConnectionTest, OpenSSLSessionTickets) {
 }
 
 TEST_F(ConnectionTest, OpenSSLSnapStart) {
+  //static const char* const args[] = {"/usr/bin/gdb", "--args", kOpenSSLHelper, "snap-start", NULL};
   static const char* const args[] = {kOpenSSLHelper, "snap-start", NULL};
   Result r;
 
@@ -426,10 +434,10 @@ TEST_F(ConnectionTest, OpenSSLSnapStart) {
   Connection conn2(&ctx);
   conn2.EnableDefault();
   conn2.SetPredictedCertificates(server_certs, server_certs_len);
-  r = conn2.SetSnapStartData(static_cast<uint8_t*>(snap_start_data.iov_base), snap_start_data.iov_len);
+  r = conn2.SetSnapStartData(static_cast<uint8_t*>(snap_start_data.iov_base), snap_start_data.iov_len, kMsg, sizeof(kMsg));
   MaybePrintResult(r);
   ASSERT_EQ(0, ErrorCodeFromResult(r));
-  PerformConnection(client_, &conn2);
+  PerformConnection(client_, &conn2, true /* snap started */);
   ASSERT_TRUE(conn2.did_snap_start());
 }
 
@@ -463,13 +471,13 @@ TEST_F(ConnectionTest, OpenSSLSnapStartResume) {
   Connection conn2(&ctx);
   conn2.EnableDefault();
   conn2.SetPredictedCertificates(server_certs, server_certs_len);
-  r = conn2.SetSnapStartData(static_cast<uint8_t*>(snap_start_data.iov_base), snap_start_data.iov_len);
+  r = conn2.SetSnapStartData(static_cast<uint8_t*>(snap_start_data.iov_base), snap_start_data.iov_len, kMsg, sizeof(kMsg));
   MaybePrintResult(r);
   ASSERT_EQ(0, ErrorCodeFromResult(r));
   r = conn2.SetResumptionData(static_cast<uint8_t*>(resumption_data.iov_base), resumption_data.iov_len);
   MaybePrintResult(r);
   ASSERT_EQ(0, ErrorCodeFromResult(r));
-  PerformConnection(client_, &conn2);
+  PerformConnection(client_, &conn2, true);
   ASSERT_TRUE(conn2.did_snap_start());
   ASSERT_TRUE(conn2.did_resume());
 }
@@ -499,10 +507,10 @@ TEST_F(ConnectionTest, OpenSSLSnapStartRecovery) {
   Connection conn2(&ctx);
   conn2.EnableDefault();
   conn2.SetPredictedCertificates(server_certs, server_certs_len);
-  r = conn2.SetSnapStartData(static_cast<uint8_t*>(snap_start_data.iov_base), snap_start_data.iov_len);
+  r = conn2.SetSnapStartData(static_cast<uint8_t*>(snap_start_data.iov_base), snap_start_data.iov_len, kMsg, sizeof(kMsg));
   MaybePrintResult(r);
   ASSERT_EQ(0, ErrorCodeFromResult(r));
-  PerformConnection(client_, &conn2);
+  PerformConnection(client_, &conn2, true);
   ASSERT_FALSE(conn2.did_snap_start());
 }
 
@@ -536,16 +544,64 @@ TEST_F(ConnectionTest, OpenSSLSnapStartResumeRecovery) {
   Connection conn2(&ctx);
   conn2.EnableDefault();
   conn2.SetPredictedCertificates(server_certs, server_certs_len);
-  r = conn2.SetSnapStartData(static_cast<uint8_t*>(snap_start_data.iov_base), snap_start_data.iov_len);
+  r = conn2.SetSnapStartData(static_cast<uint8_t*>(snap_start_data.iov_base), snap_start_data.iov_len, kMsg, sizeof(kMsg));
   MaybePrintResult(r);
   ASSERT_EQ(0, ErrorCodeFromResult(r));
   r = conn2.SetResumptionData(static_cast<uint8_t*>(resumption_data.iov_base), resumption_data.iov_len);
   MaybePrintResult(r);
   ASSERT_EQ(0, ErrorCodeFromResult(r));
-  PerformConnection(client_, &conn2);
+  PerformConnection(client_, &conn2, true);
   ASSERT_FALSE(conn2.did_snap_start());
   ASSERT_TRUE(conn2.did_resume());
 }
+
+TEST_F(ConnectionTest, OpenSSLSnapStartResumeRecoveryMispredict) {
+  // This test doesn't trigger a recovery by having the helper binary reject
+  // the random, but rather by corrupting the Snap Start data so that we
+  // mispredict the server's response.
+  static const char* const args[] = {kOpenSSLHelper, "snap-start", NULL};
+  Result r;
+
+  OpenSSLContext ctx;
+  Connection conn(&ctx);
+  conn.EnableDefault();
+  conn.CollectSnapStartData();
+  StartServer(args);
+  PerformConnection(client_, &conn);
+  ASSERT_FALSE(conn.did_resume());
+  ASSERT_TRUE(conn.is_snap_start_data_available());
+  ASSERT_TRUE(conn.is_resumption_data_availible());
+
+  struct iovec snap_start_data;
+  r = conn.GetSnapStartData(&snap_start_data);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+
+  // Force the ServerHello version to SSLv3.
+  static_cast<uint8_t*>(snap_start_data.iov_base)[15] = 0;
+
+  struct iovec resumption_data;
+  r = conn.GetResumptionData(&resumption_data);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+
+  const struct iovec *server_certs;
+  unsigned server_certs_len;
+  r = conn.server_certificates(&server_certs, &server_certs_len);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+
+  Connection conn2(&ctx);
+  conn2.EnableDefault();
+  conn2.SetPredictedCertificates(server_certs, server_certs_len);
+  r = conn2.SetSnapStartData(static_cast<uint8_t*>(snap_start_data.iov_base), snap_start_data.iov_len, kMsg, sizeof(kMsg));
+  MaybePrintResult(r);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+  r = conn2.SetResumptionData(static_cast<uint8_t*>(resumption_data.iov_base), resumption_data.iov_len);
+  MaybePrintResult(r);
+  ASSERT_EQ(0, ErrorCodeFromResult(r));
+  PerformConnection(client_, &conn2, true);
+  ASSERT_FALSE(conn2.did_snap_start());
+  ASSERT_TRUE(conn2.did_resume());
+}
+
 
 TEST_F(ConnectionTest, OpenSSLSnapStartResumeRecovery2) {
   static const char* const args[] = {kOpenSSLHelper, "snap-start-recovery", NULL};
@@ -580,13 +636,13 @@ TEST_F(ConnectionTest, OpenSSLSnapStartResumeRecovery2) {
   Connection conn2(&ctx);
   conn2.EnableDefault();
   conn2.SetPredictedCertificates(server_certs, server_certs_len);
-  r = conn2.SetSnapStartData(static_cast<uint8_t*>(snap_start_data.iov_base), snap_start_data.iov_len);
+  r = conn2.SetSnapStartData(static_cast<uint8_t*>(snap_start_data.iov_base), snap_start_data.iov_len, kMsg, sizeof(kMsg));
   MaybePrintResult(r);
   ASSERT_EQ(0, ErrorCodeFromResult(r));
   r = conn2.SetResumptionData(static_cast<uint8_t*>(resumption_data.iov_base), resumption_data.iov_len);
   MaybePrintResult(r);
   ASSERT_EQ(0, ErrorCodeFromResult(r));
-  PerformConnection(client_, &conn2);
+  PerformConnection(client_, &conn2, true);
   ASSERT_FALSE(conn2.did_snap_start());
   ASSERT_FALSE(conn2.did_resume());
 }

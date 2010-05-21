@@ -17,6 +17,8 @@
 #include "tlsclient/src/sink.h"
 #include "tlsclient/src/crypto/cipher_suites.h"
 
+#include <stdio.h>
+
 namespace tlsclient {
 
 // RFC 5746, section 3.3
@@ -398,7 +400,6 @@ Result MarshalFinished(Sink* sink, ConnectionPrivate* priv) {
   const uint8_t* const verify_data = priv->handshake_hash->ClientVerifyData(&verify_data_size, priv->master_secret, sizeof(priv->master_secret));
   uint8_t* b = sink->Block(verify_data_size);
   memcpy(b, verify_data, verify_data_size);
-
   return 0;
 }
 
@@ -425,16 +426,12 @@ static const HandshakeMessage kPermittedHandshakeMessagesPerState[][2] = {
   /* SEND_SNAP_START_CLIENT_KEY_EXCHANGE */ { INVALID_MESSAGE },
   /* SEND_SNAP_START_CHANGE_CIPHER_SPEC */ { INVALID_MESSAGE },
   /* SEND_SNAP_START_FINISHED */ { INVALID_MESSAGE },
-  /* RECV_SNAP_START_SERVER_HELLO */ { SERVER_HELLO, INVALID_MESSAGE },
-  /* RECV_SNAP_START_CERTIFICATE */ { CERTIFICATE, INVALID_MESSAGE },
-  /* RECV_SNAP_START_SERVER_HELLO_DONE */ { SERVER_HELLO_DONE, INVALID_MESSAGE },
-  /* RECV_SNAP_START_SESSION_TICKET */ { SESSION_TICKET, INVALID_MESSAGE },
+  /* RECV_SNAP_START_SESSION_TICKET */ { SESSION_TICKET, SERVER_HELLO },
   /* RECV_SNAP_START_CHANGE_CIPHER_SPEC */ { CHANGE_CIPHER_SPEC, INVALID_MESSAGE },
   /* RECV_SNAP_START_FINISHED */ { FINISHED, INVALID_MESSAGE },
 
   /* RECV_SNAP_START_RECOVERY_CERTIFICATE */ { CERTIFICATE, INVALID_MESSAGE },
   /* RECV_SNAP_START_RECOVERY_SERVER_HELLO_DONE */ { SERVER_HELLO_DONE, INVALID_MESSAGE },
-  /* SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC_REVERT */ { INVALID_MESSAGE },
   /* SEND_SNAP_START_RECOVERY_CLIENT_KEY_EXCHANGE */ { INVALID_MESSAGE },
   /* SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC */ { INVALID_MESSAGE },
   /* SEND_SNAP_START_RECOVERY_FINISHED */ { INVALID_MESSAGE },
@@ -445,22 +442,18 @@ static const HandshakeMessage kPermittedHandshakeMessagesPerState[][2] = {
 
   /* SEND_SNAP_START_RESUME_CHANGE_CIPHER_SPEC */ { INVALID_MESSAGE },
   /* SEND_SNAP_START_RESUME_FINISHED */ { INVALID_MESSAGE },
-  /* RECV_SNAP_START_RESUME_SERVER_HELLO */ { SERVER_HELLO, INVALID_MESSAGE },
-  /* RECV_SNAP_START_RESUME_SERVER_HELLO_DONE */ { SERVER_HELLO_DONE, INVALID_MESSAGE },
-  /* RECV_SNAP_START_RESUME_CHANGE_CIPHER_SPEC */ { CHANGE_CIPHER_SPEC, INVALID_MESSAGE },
+  /* RECV_SNAP_START_RESUME_CHANGE_CIPHER_SPEC */ { CHANGE_CIPHER_SPEC, SERVER_HELLO },
   /* RECV_SNAP_START_RESUME_FINISHED */ { FINISHED, INVALID_MESSAGE },
 
   /* RECV_SNAP_START_RESUME_RECOVERY_SESSION_TICKET */ { SESSION_TICKET, INVALID_MESSAGE },
   /* RECV_SNAP_START_RESUME_RECOVERY_CHANGE_CIPHER_SPEC */ { CHANGE_CIPHER_SPEC, INVALID_MESSAGE },
   /* RECV_SNAP_START_RESUME_RECOVERY_FINISHED */ { FINISHED, INVALID_MESSAGE },
-  /* SEND_SNAP_START_RESUME_RECOVERY_CHANGE_CIPHER_SPEC_REVERT */ { INVALID_MESSAGE },
   /* SEND_SNAP_START_RESUME_RECOVERY_CHANGE_CIPHER_SPEC */ { INVALID_MESSAGE },
   /* SEND_SNAP_START_RESUME_RECOVERY_FINISHED */ { INVALID_MESSAGE },
   /* SEND_SNAP_START_RESUME_RECOVERY_RETRANSMIT */ { INVALID_MESSAGE },
 
   /* RECV_SNAP_START_RESUME_RECOVERY2_CERTIFICATE */ { CERTIFICATE, INVALID_MESSAGE },
   /* RECV_SNAP_START_RESUME_RECOVERY2_SERVER_HELLO_DONE */ { SERVER_HELLO_DONE, INVALID_MESSAGE },
-  /* SEND_SNAP_START_RESUME_RECOVERY2_CHANGE_CIPHER_SPEC_REVERT */ { INVALID_MESSAGE },
   /* SEND_SNAP_START_RESUME_RECOVERY2_CLIENT_KEY_EXCHANGE */ { INVALID_MESSAGE },
   /* SEND_SNAP_START_RESUME_RECOVERY2_CHANGE_CIPHER_SPEC */ { INVALID_MESSAGE },
   /* SEND_SNAP_START_RESUME_RECOVERY2_FINISHED */ { INVALID_MESSAGE },
@@ -492,17 +485,13 @@ extern const HandshakeState kNextState[] = {
 
   /* SEND_SNAP_START_CLIENT_KEY_EXCHANGE */ SEND_SNAP_START_CHANGE_CIPHER_SPEC,
   /* SEND_SNAP_START_CHANGE_CIPHER_SPEC */ SEND_SNAP_START_FINISHED,
-  /* SEND_SNAP_START_FINISHED */ RECV_SNAP_START_SERVER_HELLO,
-  /* RECV_SNAP_START_SERVER_HELLO */ STATE_MUST_BRANCH,
-  /* RECV_SNAP_START_CERTIFICATE */ RECV_SNAP_START_SERVER_HELLO_DONE,
-  /* RECV_SNAP_START_SERVER_HELLO_DONE */ RECV_SNAP_START_SESSION_TICKET,
+  /* SEND_SNAP_START_FINISHED */ RECV_SNAP_START_SESSION_TICKET,
   /* RECV_SNAP_START_SESSION_TICKET */ RECV_SNAP_START_CHANGE_CIPHER_SPEC,
   /* RECV_SNAP_START_CHANGE_CIPHER_SPEC */ RECV_SNAP_START_FINISHED,
   /* RECV_SNAP_START_FINISHED */ AWAIT_HELLO_REQUEST,
 
   /* RECV_SNAP_START_RECOVERY_CERTIFICATE */ RECV_SNAP_START_RECOVERY_SERVER_HELLO_DONE,
-  /* RECV_SNAP_START_RECOVERY_SERVER_HELLO_DONE */ SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC_REVERT,
-  /* SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC_REVERT */ SEND_SNAP_START_RECOVERY_CLIENT_KEY_EXCHANGE,
+  /* RECV_SNAP_START_RECOVERY_SERVER_HELLO_DONE */ SEND_SNAP_START_RECOVERY_CLIENT_KEY_EXCHANGE,
   /* SEND_SNAP_START_RECOVERY_CLIENT_KEY_EXCHANGE */ SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC,
   /* SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC */ SEND_SNAP_START_RECOVERY_FINISHED,
   /* SEND_SNAP_START_RECOVERY_FINISHED */ SEND_SNAP_START_RECOVERY_RETRANSMIT,
@@ -512,23 +501,19 @@ extern const HandshakeState kNextState[] = {
   /* RECV_SNAP_START_RECOVERY_FINISHED */ AWAIT_HELLO_REQUEST,
 
   /* SEND_SNAP_START_RESUME_CHANGE_CIPHER_SPEC */ SEND_SNAP_START_RESUME_FINISHED,
-  /* SEND_SNAP_START_RESUME_FINISHED */ RECV_SNAP_START_RESUME_SERVER_HELLO,
-  /* RECV_SNAP_START_RESUME_SERVER_HELLO */ STATE_MUST_BRANCH,
-  /* RECV_SNAP_START_RESUME_SERVER_HELLO_DONE */ RECV_SNAP_START_RESUME_CHANGE_CIPHER_SPEC,
+  /* SEND_SNAP_START_RESUME_FINISHED */ RECV_SNAP_START_RESUME_CHANGE_CIPHER_SPEC,
   /* RECV_SNAP_START_RESUME_CHANGE_CIPHER_SPEC */ RECV_SNAP_START_RESUME_FINISHED,
   /* RECV_SNAP_START_RESUME_FINISHED */ AWAIT_HELLO_REQUEST,
 
   /* RECV_SNAP_START_RESUME_RECOVERY_SESSION_TICKET */ RECV_SNAP_START_RESUME_RECOVERY_CHANGE_CIPHER_SPEC,
   /* RECV_SNAP_START_RESUME_RECOVERY_CHANGE_CIPHER_SPEC */ RECV_SNAP_START_RESUME_RECOVERY_FINISHED,
-  /* RECV_SNAP_START_RESUME_RECOVERY_FINISHED */ SEND_SNAP_START_RESUME_RECOVERY_CHANGE_CIPHER_SPEC_REVERT,
-  /* SEND_SNAP_START_RESUME_RECOVERY_CHANGE_CIPHER_SPEC_REVERT */ SEND_SNAP_START_RESUME_RECOVERY_CHANGE_CIPHER_SPEC,
+  /* RECV_SNAP_START_RESUME_RECOVERY_FINISHED */ SEND_SNAP_START_RESUME_RECOVERY_CHANGE_CIPHER_SPEC,
   /* SEND_SNAP_START_RESUME_RECOVERY_CHANGE_CIPHER_SPEC */ SEND_SNAP_START_RESUME_RECOVERY_FINISHED,
   /* SEND_SNAP_START_RESUME_RECOVERY_FINISHED */ SEND_SNAP_START_RESUME_RECOVERY_RETRANSMIT,
   /* SEND_SNAP_START_RESUME_RECOVERY_RETRANSMIT */ AWAIT_HELLO_REQUEST,
 
   /* RECV_SNAP_START_RESUME_RECOVERY2_CERTIFICATE */ RECV_SNAP_START_RESUME_RECOVERY2_SERVER_HELLO_DONE,
-  /* RECV_SNAP_START_RESUME_RECOVERY2_SERVER_HELLO_DONE */ SEND_SNAP_START_RESUME_RECOVERY2_CHANGE_CIPHER_SPEC_REVERT,
-  /* SEND_SNAP_START_RESUME_RECOVERY2_CHANGE_CIPHER_SPEC_REVERT */ SEND_SNAP_START_RESUME_RECOVERY2_CLIENT_KEY_EXCHANGE,
+  /* RECV_SNAP_START_RESUME_RECOVERY2_SERVER_HELLO_DONE */ SEND_SNAP_START_RESUME_RECOVERY2_CLIENT_KEY_EXCHANGE,
   /* SEND_SNAP_START_RESUME_RECOVERY2_CLIENT_KEY_EXCHANGE */ SEND_SNAP_START_RESUME_RECOVERY2_CHANGE_CIPHER_SPEC,
   /* SEND_SNAP_START_RESUME_RECOVERY2_CHANGE_CIPHER_SPEC */ SEND_SNAP_START_RESUME_RECOVERY2_FINISHED,
   /* SEND_SNAP_START_RESUME_RECOVERY2_FINISHED */ SEND_SNAP_START_RESUME_RECOVERY2_RETRANSMIT,
@@ -538,7 +523,7 @@ extern const HandshakeState kNextState[] = {
   /* RECV_SNAP_START_RESUME_RECOVERY2_FINISHED */ AWAIT_HELLO_REQUEST,
 };
 
-#ifdef TLSCLIENT_DEBUG
+//#ifdef TLSCLIENT_DEBUG
 const char *kStateNames[] = {
   "AWAIT_HELLO_REQUEST",
   "SEND_CLIENT_HELLO",
@@ -551,27 +536,20 @@ const char *kStateNames[] = {
   "RECV_SESSION_TICKET",
   "RECV_CHANGE_CIPHER_SPEC",
   "RECV_FINISHED",
-
   "RECV_RESUME_SERVER_HELLO_DONE",
   "RECV_RESUME_SESSION_TICKET",
   "RECV_RESUME_CHANGE_CIPHER_SPEC",
   "RECV_RESUME_FINISHED",
   "SEND_RESUME_CHANGE_CIPHER_SPEC",
   "SEND_RESUME_FINISHED",
-
   "SEND_SNAP_START_CLIENT_KEY_EXCHANGE",
   "SEND_SNAP_START_CHANGE_CIPHER_SPEC",
   "SEND_SNAP_START_FINISHED",
-  "RECV_SNAP_START_SERVER_HELLO",
-  "RECV_SNAP_START_CERTIFICATE",
-  "RECV_SNAP_START_SERVER_HELLO_DONE",
   "RECV_SNAP_START_SESSION_TICKET",
   "RECV_SNAP_START_CHANGE_CIPHER_SPEC",
   "RECV_SNAP_START_FINISHED",
-
   "RECV_SNAP_START_RECOVERY_CERTIFICATE",
   "RECV_SNAP_START_RECOVERY_SERVER_HELLO_DONE",
-  "SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC_REVERT",
   "SEND_SNAP_START_RECOVERY_CLIENT_KEY_EXCHANGE",
   "SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC",
   "SEND_SNAP_START_RECOVERY_FINISHED",
@@ -579,25 +557,19 @@ const char *kStateNames[] = {
   "RECV_SNAP_START_RECOVERY_SESSION_TICKET",
   "RECV_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC",
   "RECV_SNAP_START_RECOVERY_FINISHED",
-
   "SEND_SNAP_START_RESUME_CHANGE_CIPHER_SPEC",
   "SEND_SNAP_START_RESUME_FINISHED",
-  "RECV_SNAP_START_RESUME_SERVER_HELLO",
-  "RECV_SNAP_START_RESUME_SERVER_HELLO_DONE",
   "RECV_SNAP_START_RESUME_CHANGE_CIPHER_SPEC",
   "RECV_SNAP_START_RESUME_FINISHED",
-
+  "RECV_SNAP_START_RESUME_RECOVERY_SERVER_HELLO_DONE",
   "RECV_SNAP_START_RESUME_RECOVERY_SESSION_TICKET",
   "RECV_SNAP_START_RESUME_RECOVERY_CHANGE_CIPHER_SPEC",
   "RECV_SNAP_START_RESUME_RECOVERY_FINISHED",
-  "SEND_SNAP_START_RESUME_RECOVERY_CHANGE_CIPHER_SPEC_REVERT",
   "SEND_SNAP_START_RESUME_RECOVERY_CHANGE_CIPHER_SPEC",
   "SEND_SNAP_START_RESUME_RECOVERY_FINISHED",
   "SEND_SNAP_START_RESUME_RECOVERY_RETRANSMIT",
-
   "RECV_SNAP_START_RESUME_RECOVERY2_CERTIFICATE",
   "RECV_SNAP_START_RESUME_RECOVERY2_SERVER_HELLO_DONE",
-  "SEND_SNAP_START_RESUME_RECOVERY2_CHANGE_CIPHER_SPEC_REVERT",
   "SEND_SNAP_START_RESUME_RECOVERY2_CLIENT_KEY_EXCHANGE",
   "SEND_SNAP_START_RESUME_RECOVERY2_CHANGE_CIPHER_SPEC",
   "SEND_SNAP_START_RESUME_RECOVERY2_FINISHED",
@@ -606,7 +578,7 @@ const char *kStateNames[] = {
   "RECV_SNAP_START_RESUME_RECOVERY2_CHANGE_CIPHER_SPEC",
   "RECV_SNAP_START_RESUME_RECOVERY2_FINISHED",
 };
-#endif  // TLSCLIENT_DEBUG
+//#endif  // TLSCLIENT_DEBUG
 
 static void AddHandshakeMessageToVerifyHash(HandshakeHash* handshake_hash, HandshakeMessage type, Buffer* in) {
   uint8_t header[4];
@@ -641,10 +613,7 @@ Result ProcessHandshakeMessage(ConnectionPrivate* priv, HandshakeMessage type, B
   if (priv->handshake_hash &&
       type != FINISHED &&
       type != SERVER_HELLO &&
-      type != CHANGE_CIPHER_SPEC &&
-      priv->state != RECV_SNAP_START_SERVER_HELLO &&
-      priv->state != RECV_SNAP_START_CERTIFICATE &&
-      priv->state != RECV_SNAP_START_SERVER_HELLO_DONE) {
+      type != CHANGE_CIPHER_SPEC) {
     AddHandshakeMessageToVerifyHash(priv->handshake_hash, type, in);
   }
 
@@ -695,8 +664,20 @@ Result ProcessHandshakeMessage(ConnectionPrivate* priv, HandshakeMessage type, B
 
 Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
   bool ok;
-
   const Buffer::Pos start_of_server_hello = in->Tell();
+
+  if (priv->state == RECV_SNAP_START_SESSION_TICKET ||
+      priv->state == RECV_SNAP_START_RESUME_CHANGE_CIPHER_SPEC) {
+    // We were expecting to perform a snap-start, but the server responded with
+    // a normal ServerHello. We need to enter recovery.
+    priv->server_verify.iov_base = NULL;
+    priv->server_verify.iov_len = 0;
+    priv->expecting_session_ticket = false;
+
+    if (priv->write_cipher_spec)
+      priv->write_cipher_spec->DecRef();
+    priv->write_cipher_spec = NULL;
+  }
 
   uint16_t server_wire_version;
   if (!in->U16(&server_wire_version))
@@ -707,37 +688,8 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
   if (priv->version_established && priv->version != version)
     return ERROR_RESULT(ERR_INVALID_HANDSHAKE_MESSAGE);
 
-  uint8_t server_random[sizeof(priv->server_random)];
-  if (!in->Read(server_random, sizeof(server_random)))
+  if (!in->Read(priv->server_random, sizeof(priv->server_random)))
     return ERROR_RESULT(ERR_INVALID_HANDSHAKE_MESSAGE);
-
-  if (priv->state == RECV_SNAP_START_SERVER_HELLO ||
-      priv->state == RECV_SNAP_START_RESUME_SERVER_HELLO) {
-    if (memcmp(priv->server_random, server_random, sizeof(priv->server_random)) == 0) {
-      // Snap start accepted.
-      priv->recording_application_data = false;
-      priv->did_snap_start = true;
-
-      if (priv->state == RECV_SNAP_START_RESUME_SERVER_HELLO) {
-        priv->did_resume = true;
-        priv->state = RECV_SNAP_START_RESUME_CHANGE_CIPHER_SPEC;
-      } else {
-        priv->state = RECV_SNAP_START_CERTIFICATE;
-      }
-      return 0;
-    }
-
-    // The server didn't accept our suggested server random which means that
-    // we need to perform snap start recovery.
-    priv->server_verify.iov_base = NULL;
-    priv->server_verify.iov_len = 0;
-    priv->expecting_session_ticket = false;
-
-    if (priv->write_cipher_spec)
-      priv->write_cipher_spec->DecRef();
-    priv->write_cipher_spec = NULL;
-  }
-  memcpy(priv->server_random, server_random, sizeof(priv->server_random));
 
   Buffer session_id_buf(in->VariableLength(&ok, 1));
   if (!ok)
@@ -818,9 +770,9 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
     priv->resumption_data_ready = !priv->have_session_ticket_to_present;
   } else if (priv->state == RECV_SERVER_HELLO) {
     priv->state = RECV_CERTIFICATE;
-  } else if (priv->state == RECV_SNAP_START_SERVER_HELLO) {
+  } else if (priv->state == RECV_SNAP_START_SESSION_TICKET) {
     priv->state = RECV_SNAP_START_RECOVERY_CERTIFICATE;
-  } else if (priv->state == RECV_SNAP_START_RESUME_SERVER_HELLO) {
+  } else if (priv->state == RECV_SNAP_START_RESUME_CHANGE_CIPHER_SPEC) {
     priv->state = RECV_SNAP_START_RESUME_RECOVERY2_CERTIFICATE;
   } else {
     return ERROR_RESULT(ERR_INTERNAL_ERROR);
@@ -859,7 +811,7 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
       } else {
         priv->state = RECV_RESUME_CHANGE_CIPHER_SPEC;
       }
-    } else if (priv->state == RECV_SNAP_START_RESUME_SERVER_HELLO) {
+    } else if (priv->state == RECV_SNAP_START_RESUME_CHANGE_CIPHER_SPEC) {
       if (priv->expecting_session_ticket) {
         priv->state = RECV_SNAP_START_RESUME_RECOVERY_SESSION_TICKET;
       } else {
@@ -875,9 +827,6 @@ Result ProcessServerHello(ConnectionPrivate* priv, Buffer* in) {
 
 Result ProcessServerCertificate(ConnectionPrivate* priv, Buffer* in) {
   bool ok;
-
-  if (priv->state == RECV_SNAP_START_CERTIFICATE)
-    return 0;
 
   Buffer certificates(in->VariableLength(&ok, 3));
   if (!ok)
@@ -921,6 +870,13 @@ Result ProcessServerHelloDone(ConnectionPrivate* priv, Buffer* in) {
 }
 
 Result ProcessServerFinished(ConnectionPrivate* priv, Buffer* in) {
+  if (priv->state == RECV_SNAP_START_RESUME_FINISHED) {
+    // This confirms that the server accepted our snap start.
+    priv->did_snap_start = true;
+    priv->did_resume = true;
+    priv->can_send_application_data = true;
+  }
+
   unsigned server_verify_len;
   const uint8_t* server_verify;
 
@@ -956,7 +912,7 @@ Result ProcessServerFinished(ConnectionPrivate* priv, Buffer* in) {
     priv->state = SEND_RESUME_CHANGE_CIPHER_SPEC;
   } else if (priv->state == RECV_SNAP_START_RESUME_RECOVERY_FINISHED) {
     AddHandshakeMessageToVerifyHash(priv->handshake_hash, FINISHED, in);
-    priv->state = SEND_SNAP_START_RESUME_RECOVERY_CHANGE_CIPHER_SPEC_REVERT;
+    priv->state = SEND_SNAP_START_RESUME_RECOVERY_CHANGE_CIPHER_SPEC;
   } else {
     return ERROR_RESULT(ERR_INTERNAL_ERROR);
   }
@@ -965,6 +921,12 @@ Result ProcessServerFinished(ConnectionPrivate* priv, Buffer* in) {
 }
 
 Result ProcessSessionTicket(ConnectionPrivate* priv, Buffer* in) {
+  if (priv->state == RECV_SNAP_START_SESSION_TICKET) {
+    // This confirms that the server accepted our snap start.
+    priv->did_snap_start = true;
+    priv->can_send_application_data = true;
+  }
+
   uint32_t lifetime_hint;
   if (!in->U32(&lifetime_hint))
     return ERROR_RESULT(ERR_INVALID_HANDSHAKE_MESSAGE);

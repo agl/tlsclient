@@ -48,7 +48,6 @@ struct ConnectionPrivate {
         snap_start_data_available(false),
         snap_start_attempt(false),
         snap_start_recovery(false),
-        recording_application_data(false),
         did_snap_start(false),
         session_tickets(false),
         have_session_ticket_to_present(false),
@@ -56,6 +55,7 @@ struct ConnectionPrivate {
     sent_client_hello.iov_base = 0;
     server_verify.iov_base = 0;
     server_verify.iov_len = 0;
+    snap_start_application_data.iov_len = 0;
   }
 
   ~ConnectionPrivate();
@@ -163,13 +163,10 @@ struct ConnectionPrivate {
   struct iovec predicted_response;
   // If the server rejected our snap-start then this is true.
   bool snap_start_recovery;
-  // If we are sending application data records after a snap-start we have to
-  // record them in case we enter recovery and need to retransmit.
-  bool recording_application_data;
-  std::vector<struct iovec> recorded_application_data;
   // This is true if the handshake successfully managed a snap-start (without
   // entering recovery)
   bool did_snap_start;
+  struct iovec snap_start_application_data;
 
   // This is the server's expected Finished data for the snap-start resume
   // case.

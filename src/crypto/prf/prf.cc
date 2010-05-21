@@ -101,10 +101,10 @@ static void PRF12(uint8_t* out, size_t out_len,
 // In order to make the rest of the code more generic, this function takes and
 // ignores a |label| argument and it assumes that the client and server randoms
 // have been concatenated and provided in the |seed| argument.
-static void PRF30 (uint8_t* out, size_t out_len,
-                   const uint8_t* secret, size_t secret_len,
-                   const uint8_t* label, size_t label_len,
-                   const uint8_t* seed, size_t seed_len) {
+static void PRF30(uint8_t* out, size_t out_len,
+                  const uint8_t* secret, size_t secret_len,
+                  const uint8_t* label, size_t label_len,
+                  const uint8_t* seed, size_t seed_len) {
   MD5 md5;
   SHA1 sha1;
   size_t done = 0;
@@ -246,6 +246,10 @@ class HandshakeHash30 : public HandshakeHash {
     md5_.Update(data, length);
   }
 
+  unsigned Length() const {
+    return sizeof(client_verify_);
+  }
+
   virtual const uint8_t* ClientVerifyData(unsigned* out_size, const uint8_t* master_secret, size_t master_secret_len) {
     static const uint8_t kMagic[4] = {0x43, 0x4c, 0x4e, 0x54};
     VerifyData(client_verify_, master_secret, master_secret_len, kMagic);
@@ -311,6 +315,10 @@ class HandshakeHash10 : public HandshakeHash {
     md5_.Update(data, length);
   }
 
+  unsigned Length() const {
+    return sizeof(client_verify_);
+  }
+
   virtual const uint8_t* ClientVerifyData(unsigned* out_size, const uint8_t* master_secret, size_t master_secret_len) {
     static const char kLabel[] = "client finished";
     uint8_t digests[MD5::DIGEST_SIZE + SHA1::DIGEST_SIZE];
@@ -351,6 +359,10 @@ class HandshakeHash12 : public HandshakeHash {
  public:
   void Update(const void* data, size_t length) {
     sha256_.Update(data, length);
+  }
+
+  unsigned Length() const {
+    return sizeof(client_verify_);
   }
 
   virtual const uint8_t* ClientVerifyData(unsigned* out_size, const uint8_t* master_secret, size_t master_secret_len) {

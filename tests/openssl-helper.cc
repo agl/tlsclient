@@ -105,8 +105,8 @@ main(int argc, char **argv) {
     SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_BOTH);
 
   if (snap_start) {
-    unsigned char epoch[8] = {1, 2, 3, 4, 5, 6, 7, 8};
-    SSL_CTX_set_snap_start_epoch(ctx, epoch);
+    unsigned char cell[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    SSL_CTX_set_snap_start_cell(ctx, cell);
   }
 
   unsigned connection_limit = 1;
@@ -142,7 +142,7 @@ main(int argc, char **argv) {
       return 1;
     }
 
-    char buffer[6];
+    unsigned char buffer[6];
     int ret = SSL_read(server, buffer, sizeof(buffer));
     if (ret == -1) {
       err = SSL_get_error(server, ret);
@@ -156,6 +156,8 @@ main(int argc, char **argv) {
     SSL_shutdown(server);
     SSL_free(server);
   }
+
+  SSL_CTX_free(ctx);
 
   return 0;
 }

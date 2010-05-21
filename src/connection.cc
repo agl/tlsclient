@@ -14,6 +14,8 @@
 #include "tlsclient/src/handshake.h"
 #include "tlsclient/src/sink.h"
 
+#include <stdio.h>
+
 #if 0
 #include <stdio.h>
 static void hexdump(const void* data, size_t length) {
@@ -61,8 +63,8 @@ void Connection::set_host_name(const char* name) {
   priv_->host_name = name;
 }
 
-bool Connection::need_to_write() const {
-  switch (priv_->state) {
+static bool IsSendState(HandshakeState state) {
+  switch (state) {
   case SEND_CLIENT_HELLO:
   case SEND_CLIENT_KEY_EXCHANGE:
   case SEND_CHANGE_CIPHER_SPEC:
@@ -72,18 +74,15 @@ bool Connection::need_to_write() const {
   case SEND_SNAP_START_CLIENT_KEY_EXCHANGE:
   case SEND_SNAP_START_CHANGE_CIPHER_SPEC:
   case SEND_SNAP_START_FINISHED:
-  case SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC_REVERT:
   case SEND_SNAP_START_RECOVERY_CLIENT_KEY_EXCHANGE:
   case SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC:
   case SEND_SNAP_START_RECOVERY_FINISHED:
   case SEND_SNAP_START_RECOVERY_RETRANSMIT:
   case SEND_SNAP_START_RESUME_CHANGE_CIPHER_SPEC:
   case SEND_SNAP_START_RESUME_FINISHED:
-  case SEND_SNAP_START_RESUME_RECOVERY_CHANGE_CIPHER_SPEC_REVERT:
   case SEND_SNAP_START_RESUME_RECOVERY_CHANGE_CIPHER_SPEC:
   case SEND_SNAP_START_RESUME_RECOVERY_FINISHED:
   case SEND_SNAP_START_RESUME_RECOVERY_RETRANSMIT:
-  case SEND_SNAP_START_RESUME_RECOVERY2_CHANGE_CIPHER_SPEC_REVERT:
   case SEND_SNAP_START_RESUME_RECOVERY2_CLIENT_KEY_EXCHANGE:
   case SEND_SNAP_START_RESUME_RECOVERY2_CHANGE_CIPHER_SPEC:
   case SEND_SNAP_START_RESUME_RECOVERY2_FINISHED:
@@ -92,6 +91,10 @@ bool Connection::need_to_write() const {
   default:
     return false;
   }
+}
+
+bool Connection::need_to_write() const {
+  return IsSendState(priv_->state);
 }
 
 bool Connection::is_server_cert_available() const {
@@ -124,6 +127,54 @@ const char* Connection::cipher_suite_name() const {
   return priv_->cipher_suite->name;
 }
 
+Result EncryptApplicationData(struct iovec* start, struct iovec* end, const struct iovec* iov, unsigned iov_len, size_t len, ConnectionPrivate* priv) {
+  // We need an extra element at the end of the array so we have to make a
+  // copy.
+  priv->out_vectors.resize(iov_len + 1);
+  memcpy(&priv->out_vectors[0], iov, iov_len * sizeof(struct iovec));
+
+  uint8_t* const header = priv->scratch;
+  header[0] = RECORD_APPLICATION_DATA;
+  uint16_t wire_version = static_cast<uint16_t>(priv->version);
+  if (priv->snap_start_attempt)
+    wire_version = static_cast<uint16_t>(priv->predicted_server_version);
+  header[1] = wire_version >> 8;
+  header[2] = wire_version;
+  header[3] = len >> 8;
+  header[4] = len;
+
+  size_t scratch_size = sizeof(priv->scratch) - 5;
+  if (!priv->write_cipher_spec)
+    return ERROR_RESULT(ERR_INTERNAL_ERROR);
+  if (!priv->write_cipher_spec->Encrypt(priv->scratch + 5, &scratch_size, header, &priv->out_vectors[0], iov_len, priv->write_seq_num))
+    return ERROR_RESULT(ERR_INTERNAL_ERROR);
+  priv->write_seq_num++;
+
+  len += scratch_size;
+  header[3] = len >> 8;
+  header[4] = len;
+
+  start->iov_base = header;
+  start->iov_len = 5;
+  end->iov_base = priv->scratch + 5;
+  end->iov_len = scratch_size;
+
+  return 0;
+}
+
+Result Connection::Encrypt(struct iovec* start, struct iovec* end, const struct iovec* iov, unsigned iov_len) {
+  if (!is_ready_to_send_application_data())
+    return ERROR_RESULT(ERR_NOT_READY_TO_SEND_APPLICATION_DATA);
+
+  Buffer buf(iov, iov_len);
+  size_t len = buf.size();
+
+  if (len > 16384)
+    return ERROR_RESULT(ERR_ENCRYPT_RECORD_TOO_LONG);
+
+  return EncryptApplicationData(start, end, iov, iov_len, len, priv_);
+}
+
 static Result EncryptRecord(ConnectionPrivate* priv, Sink* sink) {
   if (!priv->write_cipher_spec)
     return 0;
@@ -140,116 +191,81 @@ static Result EncryptRecord(ConnectionPrivate* priv, Sink* sink) {
   return 0;
 }
 
-Result Connection::SendClientHello(Sink* sink) {
+static Result SendClientHello(Sink* sink, ConnectionPrivate* priv) {
   Result r;
 
   Sink s(sink->Record(TLSv12, RECORD_HANDSHAKE));
   {
     Sink ss(s.HandshakeMessage(CLIENT_HELLO));
-    if ((r = MarshalClientHello(&ss, priv_)))
+    if ((r = MarshalClientHello(&ss, priv)))
       return r;
     // We don't add this handshake message to the handshake hash at this
     // point because we don't know which hash function we'll be using until
     // we get the ServerHello.
   }
 
-  priv_->sent_client_hello.iov_len = s.size();
-  priv_->sent_client_hello.iov_base = priv_->arena.Allocate(priv_->sent_client_hello.iov_len);
-  memcpy(priv_->sent_client_hello.iov_base, s.data(), priv_->sent_client_hello.iov_len);
+  if (!priv->snap_start_attempt)
+    priv->state = RECV_SERVER_HELLO;
 
-  if (priv_->snap_start_attempt) {
-    priv_->handshake_hash = HandshakeHashForVersion(priv_->predicted_server_version);
-    if (!priv_->handshake_hash)
-      return ERROR_RESULT(ERR_INTERNAL_ERROR);
-    priv_->handshake_hash->Update(s.data(), s.size());
-    priv_->handshake_hash->Update(priv_->predicted_response.iov_base, priv_->predicted_response.iov_len);
-    if (priv_->expecting_session_ticket) {
-      priv_->state = SEND_SNAP_START_CLIENT_KEY_EXCHANGE;
-    } else {
-      // The Finished message, which we are about to send, needs to include
-      // the server's Finished message, which doesn't exist yet. None the
-      // less, we can predict the server's finished message and feed it into
-      // our handshake hash, but we have to remember its value so that we can
-      // compare it against the message when we receive it.
-
-      unsigned verify_data_size;
-      const uint8_t* verify_data = priv_->handshake_hash->ServerVerifyData(&verify_data_size, priv_->master_secret, sizeof(priv_->master_secret));
-      priv_->server_verify.iov_base = priv_->arena.Allocate(verify_data_size);
-      memcpy(priv_->server_verify.iov_base, verify_data, verify_data_size);
-      priv_->server_verify.iov_len = verify_data_size;
-
-      uint8_t handshake_header[4];
-      handshake_header[0] = static_cast<uint8_t>(FINISHED);
-      handshake_header[1] = handshake_header[2] = 0;
-      handshake_header[3] = verify_data_size;
-
-      priv_->handshake_hash->Update(handshake_header, sizeof(handshake_header));
-      priv_->handshake_hash->Update(verify_data, verify_data_size);
-
-      Result r = SetupCiperSpec(priv_);
-      if (r)
-        return r;
-      priv_->state = SEND_SNAP_START_RESUME_CHANGE_CIPHER_SPEC;
-    }
-  } else {
-    if ((r = EncryptRecord(priv_, &s)))
+  priv->sent_client_hello.iov_len = s.size();
+  priv->sent_client_hello.iov_base = priv->arena.Allocate(s.size());
+  memcpy(priv->sent_client_hello.iov_base, s.data(), s.size());
+  if (!priv->snap_start_attempt) {
+    if ((r = EncryptRecord(priv, &s)))
       return r;
-    priv_->state = RECV_SERVER_HELLO;
   }
 
   return 0;
 }
 
-Result Connection::SendClientKeyExchange(Sink* sink) {
+static Result SendClientKeyExchange(Sink* sink, ConnectionPrivate* priv) {
   Result r;
 
-  Sink s(sink->Record(priv_->version, RECORD_HANDSHAKE));
+  Sink s(sink->Record(priv->version, RECORD_HANDSHAKE));
   {
     Sink ss(s.HandshakeMessage(CLIENT_KEY_EXCHANGE));
-    if ((r = MarshalClientKeyExchange(&ss, priv_)))
+    if ((r = MarshalClientKeyExchange(&ss, priv)))
       return r;
   }
 
-  priv_->handshake_hash->Update(s.data(), s.size());
-  if ((r = EncryptRecord(priv_, &s)))
+  priv->handshake_hash->Update(s.data(), s.size());
+  if ((r = EncryptRecord(priv, &s)))
     return r;
   return 0;
 }
 
-Result Connection::SendChangeCipherSpec(Sink* sink) {
+static Result SendChangeCipherSpec(Sink* sink, ConnectionPrivate* priv) {
   Result r;
 
-  Sink s(sink->Record(priv_->version, RECORD_CHANGE_CIPHER_SPEC));
+  Sink s(sink->Record(priv->version, RECORD_CHANGE_CIPHER_SPEC));
   s.U8(1);
-  if ((r = EncryptRecord(priv_, &s)))
+  if ((r = EncryptRecord(priv, &s)))
     return r;
 
   return 0;
 }
 
-Result Connection::SendFinished(Sink* sink) {
+static Result SendFinished(Sink* sink, ConnectionPrivate* priv) {
   Result r;
 
-  Sink s(sink->Record(priv_->version, RECORD_HANDSHAKE));
+  Sink s(sink->Record(priv->version, RECORD_HANDSHAKE));
   {
     Sink ss(s.HandshakeMessage(FINISHED));
-    if ((r = MarshalFinished(&ss, priv_)))
+    if ((r = MarshalFinished(&ss, priv)))
       return r;
   }
-  priv_->handshake_hash->Update(s.data(), s.size());
-  if ((r = EncryptRecord(priv_, &s)))
+  priv->handshake_hash->Update(s.data(), s.size());
+  if ((r = EncryptRecord(priv, &s)))
     return r;
 
-  if (priv_->false_start || priv_->snap_start_attempt) {
-    priv_->can_send_application_data = true;
-    priv_->recording_application_data = true;
-  }
+  if (priv->false_start)
+    priv->can_send_application_data = true;
 
-  if (priv_->state == SEND_FINISHED) {
-    if (priv_->expecting_session_ticket) {
-      priv_->state = RECV_SESSION_TICKET;
+  if (priv->state == SEND_FINISHED) {
+    if (priv->expecting_session_ticket) {
+      priv->state = RECV_SESSION_TICKET;
     } else {
-      priv_->state = RECV_CHANGE_CIPHER_SPEC;
+      priv->state = RECV_CHANGE_CIPHER_SPEC;
     }
   }
 
@@ -258,6 +274,112 @@ Result Connection::SendFinished(Sink* sink) {
 
 extern const HandshakeState kNextState[];
 extern const char *kStateNames[];
+
+Result SendHandshakeMessages(Sink* sink, ConnectionPrivate* priv) {
+  Result r;
+
+  while (IsSendState(priv->state)) {
+    const HandshakeState prev_state = priv->state;
+    switch (priv->state) {
+    case SEND_CLIENT_HELLO:
+      r = SendClientHello(sink, priv);
+      break;
+    case SEND_CLIENT_KEY_EXCHANGE:
+    case SEND_SNAP_START_CLIENT_KEY_EXCHANGE:
+    case SEND_SNAP_START_RECOVERY_CLIENT_KEY_EXCHANGE:
+    case SEND_SNAP_START_RESUME_RECOVERY2_CLIENT_KEY_EXCHANGE:
+      r = SendClientKeyExchange(sink, priv);
+      if ((r = GenerateMasterSecret(priv)))
+        return r;
+      if ((r = SetupCiperSpec(priv)))
+        return r;
+      break;
+    case SEND_CHANGE_CIPHER_SPEC:
+    case SEND_RESUME_CHANGE_CIPHER_SPEC:
+    case SEND_SNAP_START_CHANGE_CIPHER_SPEC:
+    case SEND_SNAP_START_RESUME_CHANGE_CIPHER_SPEC:
+    case SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC:
+    case SEND_SNAP_START_RESUME_RECOVERY_CHANGE_CIPHER_SPEC:
+    case SEND_SNAP_START_RESUME_RECOVERY2_CHANGE_CIPHER_SPEC:
+      if (priv->state == SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC) {
+        if ((r = GenerateMasterSecret(priv)))
+          return r;
+      }
+      if (priv->state == SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC ||
+          priv->state == SEND_SNAP_START_RESUME_RECOVERY_CHANGE_CIPHER_SPEC) {
+        if ((r = SetupCiperSpec(priv)))
+          return r;
+      }
+      if ((r = SendChangeCipherSpec(sink, priv)))
+        return r;
+
+      if (priv->write_cipher_spec)
+        priv->write_cipher_spec->DecRef();
+      priv->write_cipher_spec = priv->pending_write_cipher_spec;
+      priv->pending_write_cipher_spec = NULL;
+      priv->write_seq_num = 0;
+
+      break;
+    case SEND_FINISHED:
+    case SEND_RESUME_FINISHED:
+    case SEND_SNAP_START_FINISHED:
+    case SEND_SNAP_START_RESUME_FINISHED:
+    case SEND_SNAP_START_RECOVERY_FINISHED:
+    case SEND_SNAP_START_RESUME_RECOVERY_FINISHED:
+    case SEND_SNAP_START_RESUME_RECOVERY2_FINISHED:
+      r = SendFinished(sink, priv);
+      break;
+    case SEND_SNAP_START_RECOVERY_RETRANSMIT:
+    case SEND_SNAP_START_RESUME_RECOVERY_RETRANSMIT:
+    case SEND_SNAP_START_RESUME_RECOVERY2_RETRANSMIT:
+      priv->snap_start_attempt = false;
+
+      {
+        struct iovec start, end;
+        if ((r = EncryptApplicationData(&start, &end, &priv->snap_start_application_data, 1, priv->snap_start_application_data.iov_len, priv)))
+          return r;
+        sink->Copy(start.iov_base, start.iov_len);
+        sink->Copy(priv->snap_start_application_data.iov_base, priv->snap_start_application_data.iov_len);
+        sink->Copy(end.iov_base, end.iov_len);
+
+        priv->arena.Free(priv->snap_start_application_data.iov_base);
+        priv->snap_start_application_data.iov_len = 0;
+      }
+
+      if (priv->state == SEND_SNAP_START_RECOVERY_RETRANSMIT) {
+        if (priv->expecting_session_ticket) {
+          priv->state = RECV_SNAP_START_RECOVERY_SESSION_TICKET;
+        } else {
+          priv->state = RECV_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC;
+        }
+      } else if (priv->state == SEND_SNAP_START_RESUME_RECOVERY2_RETRANSMIT) {
+        if (priv->expecting_session_ticket) {
+          priv->state = RECV_SNAP_START_RESUME_RECOVERY2_SESSION_TICKET;
+        } else {
+          priv->state = RECV_SNAP_START_RESUME_RECOVERY2_CHANGE_CIPHER_SPEC;
+        }
+      }
+
+      break;
+    default:
+      return ERROR_RESULT(ERR_INTERNAL_ERROR);
+    }
+
+    if (r)
+      return r;
+
+    if (priv->state == prev_state) {
+      priv->state = kNextState[priv->state];
+      if (priv->state == STATE_MUST_BRANCH)
+        return ERROR_RESULT(ERR_INTERNAL_ERROR);
+    }
+  }
+
+  if (sink->size() == 0)
+    return ERROR_RESULT(ERR_INTERNAL_ERROR);
+
+  return 0;
+}
 
 Result Connection::Get(struct iovec* out) {
   Result r;
@@ -272,114 +394,8 @@ Result Connection::Get(struct iovec* out) {
 
   Sink sink(&priv_->arena);
 
-  while (need_to_write()) {
-    const HandshakeState prev_state = priv_->state;
-    switch (priv_->state) {
-    case SEND_CLIENT_HELLO:
-      r = SendClientHello(&sink);
-      break;
-    case SEND_CLIENT_KEY_EXCHANGE:
-    case SEND_SNAP_START_CLIENT_KEY_EXCHANGE:
-    case SEND_SNAP_START_RECOVERY_CLIENT_KEY_EXCHANGE:
-    case SEND_SNAP_START_RESUME_RECOVERY2_CLIENT_KEY_EXCHANGE:
-      r = SendClientKeyExchange(&sink);
-      if ((r = GenerateMasterSecret(priv_)))
-        return r;
-      if ((r = SetupCiperSpec(priv_)))
-        return r;
-      break;
-    case SEND_CHANGE_CIPHER_SPEC:
-    case SEND_RESUME_CHANGE_CIPHER_SPEC:
-    case SEND_SNAP_START_CHANGE_CIPHER_SPEC:
-    case SEND_SNAP_START_RESUME_CHANGE_CIPHER_SPEC:
-    case SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC_REVERT:
-    case SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC:
-    case SEND_SNAP_START_RESUME_RECOVERY_CHANGE_CIPHER_SPEC_REVERT:
-    case SEND_SNAP_START_RESUME_RECOVERY_CHANGE_CIPHER_SPEC:
-    case SEND_SNAP_START_RESUME_RECOVERY2_CHANGE_CIPHER_SPEC_REVERT:
-    case SEND_SNAP_START_RESUME_RECOVERY2_CHANGE_CIPHER_SPEC:
-      if (priv_->state == SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC) {
-        if ((r = GenerateMasterSecret(priv_)))
-          return r;
-      }
-      if (priv_->state == SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC ||
-          priv_->state == SEND_SNAP_START_RESUME_RECOVERY_CHANGE_CIPHER_SPEC) {
-        if ((r = SetupCiperSpec(priv_)))
-          return r;
-      }
-      if ((r = SendChangeCipherSpec(&sink)))
-        return r;
-
-      if (priv_->state != SEND_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC_REVERT &&
-          priv_->state != SEND_SNAP_START_RESUME_RECOVERY_CHANGE_CIPHER_SPEC_REVERT &&
-          priv_->state != SEND_SNAP_START_RESUME_RECOVERY2_CHANGE_CIPHER_SPEC_REVERT) {
-        if (priv_->write_cipher_spec)
-          priv_->write_cipher_spec->DecRef();
-        priv_->write_cipher_spec = priv_->pending_write_cipher_spec;
-        priv_->pending_write_cipher_spec = NULL;
-        priv_->write_seq_num = 0;
-      }
-
-      break;
-    case SEND_FINISHED:
-    case SEND_RESUME_FINISHED:
-    case SEND_SNAP_START_FINISHED:
-    case SEND_SNAP_START_RESUME_FINISHED:
-    case SEND_SNAP_START_RECOVERY_FINISHED:
-    case SEND_SNAP_START_RESUME_RECOVERY_FINISHED:
-    case SEND_SNAP_START_RESUME_RECOVERY2_FINISHED:
-      r = SendFinished(&sink);
-      break;
-    case SEND_SNAP_START_RECOVERY_RETRANSMIT:
-    case SEND_SNAP_START_RESUME_RECOVERY_RETRANSMIT:
-    case SEND_SNAP_START_RESUME_RECOVERY2_RETRANSMIT:
-      priv_->recording_application_data = false;
-
-      for (std::vector<struct iovec>::const_iterator i = priv_->recorded_application_data.begin(); i != priv_->recorded_application_data.end(); i++) {
-        struct iovec start, end;
-        Encrypt(&start, &end, &(*i), 1);
-        uint8_t* a = sink.Block(start.iov_len);
-        memcpy(a, start.iov_base, start.iov_len);
-        uint8_t* b = sink.Block(i->iov_len);
-        memcpy(b, i->iov_base, i->iov_len);
-        uint8_t* c = sink.Block(end.iov_len);
-        memcpy(c, end.iov_base, end.iov_len);
-        priv_->arena.Free(i->iov_base);
-      }
-      priv_->recorded_application_data.clear();
-      priv_->snap_start_attempt = false;
-
-      if (priv_->state == SEND_SNAP_START_RECOVERY_RETRANSMIT) {
-        if (priv_->expecting_session_ticket) {
-          priv_->state = RECV_SNAP_START_RECOVERY_SESSION_TICKET;
-        } else {
-          priv_->state = RECV_SNAP_START_RECOVERY_CHANGE_CIPHER_SPEC;
-        }
-      } else if (priv_->state == SEND_SNAP_START_RESUME_RECOVERY2_RETRANSMIT) {
-        if (priv_->expecting_session_ticket) {
-          priv_->state = RECV_SNAP_START_RESUME_RECOVERY2_SESSION_TICKET;
-        } else {
-          priv_->state = RECV_SNAP_START_RESUME_RECOVERY2_CHANGE_CIPHER_SPEC;
-        }
-      }
-
-      break;
-    default:
-      return ERROR_RESULT(ERR_INTERNAL_ERROR);
-    }
-
-    if (r)
-      return r;
-
-    if (priv_->state == prev_state) {
-      priv_->state = kNextState[priv_->state];
-      if (priv_->state == STATE_MUST_BRANCH)
-        return ERROR_RESULT(ERR_INTERNAL_ERROR);
-    }
-  }
-
-  if (sink.size() == 0)
-    return ERROR_RESULT(ERR_INTERNAL_ERROR);
+  if ((r = SendHandshakeMessages(&sink, priv_)))
+    return r;
 
   priv_->last_buffer = sink.Release();
   out->iov_len = sink.size();
@@ -416,56 +432,6 @@ void Connection::SetEnableBit(unsigned mask, bool enable) {
   } else {
     priv_->cipher_suite_flags_enabled &= ~mask;
   }
-}
-
-Result Connection::Encrypt(struct iovec* start, struct iovec* end, const struct iovec* iov, unsigned iov_len) {
-  if (!is_ready_to_send_application_data())
-    return ERROR_RESULT(ERR_NOT_READY_TO_SEND_APPLICATION_DATA);
-
-  Buffer buf(iov, iov_len);
-  size_t len = buf.size();
-
-  if (len > 16384)
-    return ERROR_RESULT(ERR_ENCRYPT_RECORD_TOO_LONG);
-
-  if (priv_->recording_application_data) {
-    uint8_t* data = static_cast<uint8_t*>(priv_->arena.Allocate(len));
-    if (!buf.Read(data, len))
-      return ERROR_RESULT(ERR_INTERNAL_ERROR);
-    const struct iovec iov = {data, len};
-    priv_->recorded_application_data.push_back(iov);
-  }
-
-  // We need an extra element at the end of the array so we have to make a
-  // copy.
-  priv_->out_vectors.resize(iov_len + 1);
-  memcpy(&priv_->out_vectors[0], iov, iov_len * sizeof(struct iovec));
-
-  uint8_t* const header = priv_->scratch;
-  header[0] = RECORD_APPLICATION_DATA;
-  uint16_t wire_version = static_cast<uint16_t>(priv_->version);
-  if (priv_->snap_start_attempt)
-    wire_version = static_cast<uint16_t>(priv_->predicted_server_version);
-  header[1] = wire_version >> 8;
-  header[2] = wire_version;
-  header[3] = len >> 8;
-  header[4] = len;
-
-  size_t scratch_size = sizeof(priv_->scratch) - 5;
-  if (!priv_->write_cipher_spec->Encrypt(priv_->scratch + 5, &scratch_size, header, &priv_->out_vectors[0], iov_len, priv_->write_seq_num))
-    return ERROR_RESULT(ERR_INTERNAL_ERROR);
-  priv_->write_seq_num++;
-
-  len += scratch_size;
-  header[3] = len >> 8;
-  header[4] = len;
-
-  start->iov_base = header;
-  start->iov_len = 5;
-  end->iov_base = priv_->scratch + 5;
-  end->iov_len = scratch_size;
-
-  return 0;
 }
 
 Result Connection::Process(struct iovec** out, unsigned* out_n, size_t* used,
@@ -709,7 +675,7 @@ Result Connection::GetSnapStartData(struct iovec* iov) {
   return 0;
 }
 
-Result Connection::SetSnapStartData(const uint8_t* data, size_t len) {
+Result Connection::SetSnapStartData(const uint8_t* data, size_t len, const uint8_t* app_data, size_t app_data_len) {
   const struct iovec iov = {const_cast<uint8_t*>(data), len};
   Buffer buf(&iov, 1);
   bool ok;
@@ -763,6 +729,10 @@ Result Connection::SetSnapStartData(const uint8_t* data, size_t len) {
   priv_->snap_start_attempt = true;
   priv_->version = priv_->predicted_server_version;
   priv_->session_tickets = true;
+
+  priv_->snap_start_application_data.iov_base = priv_->arena.Allocate(app_data_len);
+  memcpy(priv_->snap_start_application_data.iov_base, app_data, app_data_len);
+  priv_->snap_start_application_data.iov_len = app_data_len;
 
   return 0;
 }

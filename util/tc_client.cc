@@ -340,7 +340,7 @@ main(int argc, char **argv) {
       size_t snap_start_data_len = buf.remaining();
       uint8_t* bytes = buf.Get(NULL, snap_start_data_len);
 
-      tlsclient::Result r = conn.SetSnapStartData(bytes, snap_start_data_len);
+      tlsclient::Result r = conn.SetSnapStartData(bytes, snap_start_data_len, NULL, 0);
       free(buffer);
       if (r)
         return fatal_result(r);

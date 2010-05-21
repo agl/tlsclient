@@ -165,7 +165,7 @@ class Connection {
   void CollectSnapStartData();
   bool is_snap_start_data_available() const;
   Result GetSnapStartData(struct iovec* iov);
-  Result SetSnapStartData(const uint8_t* data, size_t len);
+  Result SetSnapStartData(const uint8_t* data, size_t len, const uint8_t* application_data, size_t application_data_len);
   bool did_snap_start() const;
 
   // set_sslv3 sets whether we should use SSLv3 only. This should never need to
@@ -194,11 +194,6 @@ class Connection {
 
  private:
   void SetEnableBit(unsigned bit, bool onoff);
-
-  Result SendClientHello(Sink*);
-  Result SendClientKeyExchange(Sink*);
-  Result SendChangeCipherSpec(Sink*);
-  Result SendFinished(Sink*);
 
   ConnectionPrivate* const priv_;
 };
