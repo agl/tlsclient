@@ -11,6 +11,9 @@
 
 namespace tlsclient {
 
+// CBC wraps a block cipher and implements Cipher Block Chaining mode. |Crypt|
+// can be called multiple times to process data incrementally, but each time
+// the total length of the data must be a multiple of the cipher's block size.
 template<class BlockCipher>
 class CBC {
  public:
@@ -20,7 +23,7 @@ class CBC {
     memcpy(last_, iv, sizeof(last_));
   }
 
-  void Crypt(struct iovec* in, unsigned in_len) {
+  void Crypt(const struct iovec* in, unsigned in_len) {
     uint8_t blockbuf[BlockCipher::BLOCK_SIZE];
     uint8_t* block;
     uint8_t last[BlockCipher::BLOCK_SIZE];
@@ -33,15 +36,15 @@ class CBC {
       const Buffer::Pos previous_position(buf.Tell());
       block = buf.Get(blockbuf, BlockCipher::BLOCK_SIZE);
 
-      if (D == ENCRYPT) {
+      if (direction_ == ENCRYPT) {
         XorBytes<BlockCipher::BLOCK_SIZE>(block, last_);
       } else {
         memcpy(last, block, sizeof(last));
       }
 
-      cipher_.Cipher(block, block);
+      cipher_.Crypt(block, block);
 
-      if (D == ENCRYPT) {
+      if (direction_ == ENCRYPT) {
         memcpy(last_, block, sizeof(last_));
       } else {
         XorBytes<BlockCipher::BLOCK_SIZE>(block, last_);
@@ -50,7 +53,7 @@ class CBC {
 
       len -= BlockCipher::BLOCK_SIZE;
 
-      if (block != blockbuf) {
+      if (block == blockbuf) {
         // We had to assemble a block which spanned iovecs. Thus we need to
         // write the result back out.
         buf.Seek(previous_position);
@@ -64,7 +67,6 @@ class CBC {
   const Direction direction_;
   uint8_t last_[BlockCipher::BLOCK_SIZE];
 };
-
 
 }  // namespace tlsclient
 

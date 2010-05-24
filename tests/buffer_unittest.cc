@@ -308,4 +308,32 @@ TEST_F(BufferTest, TruncatedU32) {
   ASSERT_FALSE(b.U32(&value));
 }
 
+TEST_F(BufferTest, Retreat) {
+  static const char kTestString[] = "\x01\x02\x03\x04";
+  struct iovec iov[3] = {
+    {const_cast<char*>(kTestString), 2},
+    {const_cast<char*>(kTestString + 2), 1},
+    {const_cast<char*>(kTestString + 3), 1},
+  };
+  Buffer b(iov, 3);
+  uint8_t v;
+
+  b.Advance(3);
+  b.Retreat(1);
+  ASSERT_TRUE(b.U8(&v));
+  ASSERT_EQ(3, v);
+
+  b.Retreat(1);
+  ASSERT_TRUE(b.U8(&v));
+  ASSERT_EQ(3, v);
+
+  b.Retreat(2);
+  ASSERT_TRUE(b.U8(&v));
+  ASSERT_EQ(2, v);
+
+  b.Retreat(2);
+  ASSERT_TRUE(b.U8(&v));
+  ASSERT_EQ(1, v);
+}
+
 }  // anonymous namespace

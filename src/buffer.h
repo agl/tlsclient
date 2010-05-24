@@ -90,6 +90,22 @@ class Buffer {
     assert(!nbytes);
   }
 
+  void Retreat(size_t nbytes) {
+    while (nbytes) {
+      if (pos_.offset == 0) {
+        if (!pos_.i)
+          return;
+        pos_.i--;
+        pos_.offset = iov_[pos_.i].iov_len;
+      }
+      size_t n = pos_.offset;
+      if (n > nbytes)
+        n = nbytes;
+      nbytes -= n;
+      pos_.offset -= n;
+    }
+  }
+
   size_t size() const {
     size_t r = 0;
     for (unsigned i = 0; i < len_; i++) {

@@ -12,6 +12,30 @@ enum Direction {
   DECRYPT = 1,
 };
 
+template<unsigned size>
+static void XorBytes(uint8_t* dest, const uint8_t* src) {
+  for (unsigned i = 0; i < size; i++) {
+    dest[i] ^= src[i];
+  }
+}
+
+template<>
+void XorBytes<8>(uint8_t* dest, const uint8_t* src) {
+  uint64_t* dest64 = reinterpret_cast<uint64_t*>(dest);
+  const uint64_t* src64 = reinterpret_cast<const uint64_t*>(src);
+
+  dest64[0] ^= src64[0];
+}
+
+template<>
+void XorBytes<16>(uint8_t* dest, const uint8_t* src) {
+  uint64_t* dest64 = reinterpret_cast<uint64_t*>(dest);
+  const uint64_t* src64 = reinterpret_cast<const uint64_t*>(src);
+
+  dest64[0] ^= src64[0];
+  dest64[1] ^= src64[1];
+}
+
 }  // namespace tlsclient
 
 #endif  // !TLSCLIENT_CRYPTO_BASE_H

@@ -421,9 +421,13 @@ void Connection::EnableMD5(bool enable) {
 
 void Connection::EnableDefault() {
   SetEnableBit(CIPHERSUITE_RSA, true);
-  SetEnableBit(CIPHERSUITE_RC4, true);
   SetEnableBit(CIPHERSUITE_SHA, true);
+  SetEnableBit(CIPHERSUITE_SHA256, true);
   SetEnableBit(CIPHERSUITE_MD5, true);
+  SetEnableBit(CIPHERSUITE_RC4, true);
+  SetEnableBit(CIPHERSUITE_CBC, true);
+  SetEnableBit(CIPHERSUITE_AES128, true);
+  SetEnableBit(CIPHERSUITE_AES256, true);
 }
 
 void Connection::SetEnableBit(unsigned mask, bool enable) {
