@@ -273,6 +273,34 @@ TEST_F(ConnectionTest, GnuTLSv12) {
   PerformConnection(client_, &conn);
 }
 
+TEST_F(ConnectionTest, OpenSSLAES) {
+  static const char* const args[] = {kOpenSSLHelper, NULL};
+
+  OpenSSLContext ctx;
+  Connection conn(&ctx);
+  conn.EnableSHA(true);
+  conn.EnableAES128(true);
+  conn.EnableCBC(true);
+  conn.EnableRSA(true);
+  StartServer(args);
+  PerformConnection(client_, &conn);
+  ASSERT_STREQ(conn.cipher_suite_name(), "TLS_RSA_WITH_AES_128_CBC_SHA");
+}
+
+TEST_F(ConnectionTest, GnuTLSAES) {
+  static const char* const args[] = {kGnuTLSHelper, NULL};
+
+  OpenSSLContext ctx;
+  Connection conn(&ctx);
+  conn.EnableSHA(true);
+  conn.EnableAES128(true);
+  conn.EnableCBC(true);
+  conn.EnableRSA(true);
+  StartServer(args);
+  PerformConnection(client_, &conn);
+  ASSERT_STREQ(conn.cipher_suite_name(), "TLS_RSA_WITH_AES_128_CBC_SHA");
+}
+
 TEST_F(ConnectionTest, OpenSSLSNI) {
   static const char* const args[] = {kOpenSSLHelper, "sni", NULL};
 

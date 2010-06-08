@@ -56,7 +56,7 @@ class Buffer {
   }
 
   bool Seek(const Pos& pos) {
-    if (pos.i < len_ && pos.offset >= iov_[pos.i].iov_len) {
+    if (pos.i < len_ && pos.offset && pos.offset >= iov_[pos.i].iov_len) {
       return false;
     } else if (pos.i == len_ && pos.offset) {
       return false;

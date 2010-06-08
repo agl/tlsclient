@@ -415,6 +415,22 @@ void Connection::EnableSHA(bool enable) {
   SetEnableBit(CIPHERSUITE_SHA, enable);
 }
 
+void Connection::EnableSHA256(bool enable) {
+  SetEnableBit(CIPHERSUITE_SHA256, enable);
+}
+
+void Connection::EnableAES128(bool enable) {
+  SetEnableBit(CIPHERSUITE_AES128, enable);
+}
+
+void Connection::EnableAES256(bool enable) {
+  SetEnableBit(CIPHERSUITE_AES256, enable);
+}
+
+void Connection::EnableCBC(bool enable) {
+  SetEnableBit(CIPHERSUITE_CBC, enable);
+}
+
 void Connection::EnableMD5(bool enable) {
   SetEnableBit(CIPHERSUITE_MD5, enable);
 }

@@ -87,6 +87,22 @@ TEST_F(BufferTest, TwoBlock) {
   ASSERT_TRUE(memcmp(kTestString2, buf + sizeof(kTestString1), sizeof(kTestString2)) == 0);
 }
 
+TEST_F(BufferTest, SeekEmtpy) {
+  struct iovec iov[2] = {
+    {NULL, 0},
+    {const_cast<char*>("test"), 4},
+  };
+  Buffer b(iov, 2);
+
+  Buffer::Pos p(b.Tell());
+  unsigned char buf[4];
+  ASSERT_TRUE(b.Read(buf, 4));
+  ASSERT_TRUE(memcmp(buf, "test", 4) == 0);
+  b.Seek(p);
+  ASSERT_TRUE(b.Read(buf, 4));
+  ASSERT_TRUE(memcmp(buf, "test", 4) == 0);
+}
+
 TEST_F(BufferTest, Advance) {
   static const char kTestString1[] = "hello";
   static const char kTestString2[] = "world";

@@ -105,8 +105,8 @@ main(int argc, char **argv) {
     SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_BOTH);
 
   if (snap_start) {
-    unsigned char cell[8] = {1, 2, 3, 4, 5, 6, 7, 8};
-    SSL_CTX_set_snap_start_cell(ctx, cell);
+    unsigned char orbit[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    SSL_CTX_set_snap_start_orbit(ctx, orbit);
   }
 
   unsigned connection_limit = 1;

@@ -179,7 +179,11 @@ class Connection {
   void EnableRSA(bool enable);
   void EnableRC4(bool enable);
   void EnableSHA(bool enable);
+  void EnableSHA256(bool enable);
   void EnableMD5(bool enable);
+  void EnableCBC(bool enable);
+  void EnableAES128(bool enable);
+  void EnableAES256(bool enable);
 
   void EnableFalseStart(bool enable);
   void EnableSessionTickets(bool enable);
