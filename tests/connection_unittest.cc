@@ -67,25 +67,25 @@ class ConnectionTest : public ::testing::Test {
 
   void StartServer(const char* const args[]) {
     const int listener = socket(AF_INET, SOCK_STREAM, 0);
-    assert(listener >= 0);
+    ASSERT_GE(listener, 0);
     struct sockaddr_in sin;
     memset(&sin, 0, sizeof(sin));
     sin.sin_family = PF_INET;
-    assert(bind(listener, (struct sockaddr*) &sin, sizeof(sin)) == 0);
+    ASSERT_TRUE(bind(listener, (struct sockaddr*) &sin, sizeof(sin)) == 0);
     socklen_t socklen = sizeof(sin);
-    assert(getsockname(listener, (struct sockaddr*) &sin, &socklen) == 0);
-    assert(socklen == sizeof(sin));
-    assert(listen(listener, 1) == 0);
+    getsockname(listener, (struct sockaddr*) &sin, &socklen);
+    ASSERT_EQ(sizeof(sin), socklen);
+    ASSERT_TRUE(listen(listener, 1) == 0);
 
     const int client = socket(AF_INET, SOCK_STREAM, 0);
-    assert(client >= 0);
-    assert(connect(client, (struct sockaddr*) &sin, sizeof(sin)) == 0);
+    ASSERT_GE(client, 0);
+    ASSERT_TRUE(connect(client, (struct sockaddr*) &sin, sizeof(sin)) == 0);
 
     static const int on = 1;
     setsockopt(client, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
 
     const int server = accept(listener, NULL, NULL);
-    assert(server >= 0);
+    ASSERT_GE(server, 0);
     close(listener);
 
     child_ = fork();
@@ -134,8 +134,10 @@ writea(int fd, const void* idata, size_t len) {
     if (r == -1) {
       if (errno == EINTR)
         continue;
+      fprintf(stderr, "writea: r:%d errno:%d\n", (int)r, errno);
       return false;
     } else if (r == 0) {
+      fprintf(stderr, "writea: r:%d", (int)r);
       return false;
     } else {
       done += r;

@@ -128,8 +128,7 @@ class Buffer {
 
   Buffer SubString(size_t len) const {
     std::vector<struct iovec> iovs;
-    const bool b = PeekV(&iovs, len);
-    assert(b);
+    PeekV(&iovs, len);
     struct iovec *iovs_copy = new struct iovec[iovs.size()];
     memcpy(&iovs_copy[0], &iovs[0], sizeof(struct iovec) * iovs.size());
     return Buffer(&iovs_copy[0], iovs.size(), true);
