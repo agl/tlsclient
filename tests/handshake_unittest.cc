@@ -63,10 +63,20 @@ class ContextBothWorking : public ContextBase {
   }
 };
 
+class FakeCertificate : public Certificate {
+  virtual bool EncryptPKCS1(uint8_t* output, uint8_t* bytes, size_t length) {
+    return false;
+  }
+
+  virtual size_t SizeEncryptPKCS1() {
+    return 0;
+  }
+};
+
 class ContextCanParseCertificates : public ContextBase {
  public:
   Certificate* ParseCertificate(const uint8_t* bytes, size_t length) {
-    return reinterpret_cast<Certificate*>(this);
+    return new FakeCertificate;
   }
 };
 

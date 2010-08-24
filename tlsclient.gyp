@@ -87,6 +87,7 @@
         '-lcrypto',
       ],
       # 'defines': ['GTEST_USE_OWN_TR1_TUPLE=1'],
+      # 'defines': [ 'HAVE_GNUTLS', ],
     },
 
     {
@@ -105,21 +106,21 @@
       ],
     },
 
-    {
-      'target_name': 'gnutls-helper',
-      'type': 'executable',
-      'sources': [
-        'tests/gnutls-helper.cc',
-      ],
-      'include_dirs': [
-        '/home/agl/src/gnutls/lib/includes',
-      ],
-      'ldflags': [
-        '-L/home/agl/src/gnutls/lib/.libs',
-        '-lgnutls',
-        '-lgcrypt',
-      ],
-    },
+#    {
+#      'target_name': 'gnutls-helper',
+#      'type': 'executable',
+#      'sources': [
+#        'tests/gnutls-helper.cc',
+#      ],
+#      'include_dirs': [
+#        '/home/agl/src/gnutls/lib/includes',
+#      ],
+#      'ldflags': [
+#        '-L/home/agl/src/gnutls/lib/.libs',
+#        '-lgnutls',
+#        '-lgcrypt',
+#      ],
+#    },
 
     {
       'target_name': 'tc-client',

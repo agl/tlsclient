@@ -21,8 +21,42 @@ using namespace tlsclient;
 
 namespace {
 
-static const char kOpenSSLHelper[] = "./out/Default/openssl-helper";
-static const char kGnuTLSHelper[] = "./out/Default/gnutls-helper";
+static const char kTestSrcDirAdditional[] =
+#if defined(TEST_SRCDIR_ADDITIONAL)
+#define xstr(x) str(x)
+#define str(x) #x
+ "" xstr(TEST_SRCDIR_ADDITIONAL) "";
+#undef xstr
+#undef str
+#else
+  "";
+#endif
+
+static const char kOpenSSLHelperBase[] = "openssl-helper";
+
+const char *OpenSSLHelper() {
+  static char path[256];
+  const char *testSrcDir = getenv("TEST_SRCDIR");
+  if (!testSrcDir)
+    testSrcDir = "./out/Default";
+  snprintf(path, sizeof(path), "%s/%s/%s", testSrcDir, kTestSrcDirAdditional, kOpenSSLHelperBase);
+  printf("TESTSRCDIR: %s\n", path);
+  return path;
+}
+
+#if defined(HAVE_GNUTLS)
+static const char kGnuTLSHelperBase[] = "gnutls-helper";
+
+const char *GnuTLSHelper() {
+  static char path[256];
+  const char *testSrcDir = getenv("TEST_SRCDIR");
+  if (!testSrcDir)
+    testSrcDir = "./out/Default";
+  snprintf(path, sizeof(path), "%s/%s/%s", testSrcDir, kTestSrcDirAdditional, kGnuTLSHelperBase);
+  return path;
+}
+#endif
+
 
 class ConnectionTest : public ::testing::Test {
  protected:
@@ -167,9 +201,6 @@ static void PerformConnection(const int fd, Connection* conn, bool is_snap_start
       }
     }
 
-    /*buffer_length++;
-    if (buffer_length == 6)
-      buffer_length = 1; */
     buffer_length = 2048;
     uint8_t* buf = static_cast<uint8_t*>(arena.Allocate(buffer_length));
     struct iovec iov, *out_iov;
@@ -234,7 +265,7 @@ static void PerformConnection(const int fd, Connection* conn, bool is_snap_start
 }
 
 TEST_F(ConnectionTest, OpenSSLSimple) {
-  static const char* const args[] = {kOpenSSLHelper, NULL};
+  static const char* const args[] = {OpenSSLHelper(), NULL};
 
   OpenSSLContext ctx;
   Connection conn(&ctx);
@@ -243,18 +274,9 @@ TEST_F(ConnectionTest, OpenSSLSimple) {
   PerformConnection(client_, &conn);
 }
 
+#if defined(HAVE_GNUTLS)
 TEST_F(ConnectionTest, GnuTLSSimple) {
-  static const char* const args[] = {kGnuTLSHelper, NULL};
-
-  OpenSSLContext ctx;
-  Connection conn(&ctx);
-  conn.EnableDefault();
-  StartServer(args);
-  PerformConnection(client_, &conn);
-}
-
-TEST_F(ConnectionTest, OpenSSLv3) {
-  static const char* const args[] = {kOpenSSLHelper, "sslv3", NULL};
+  static const char* const args[] = {GnuTLSHelper(), NULL};
 
   OpenSSLContext ctx;
   Connection conn(&ctx);
@@ -264,31 +286,17 @@ TEST_F(ConnectionTest, OpenSSLv3) {
 }
 
 TEST_F(ConnectionTest, GnuTLSv12) {
-  static const char* const args[] = {kGnuTLSHelper, "tls1.2", NULL};
+  static const char* const args[] = {GnuTLSHelper(), "tls1.2", NULL};
 
   OpenSSLContext ctx;
   Connection conn(&ctx);
   conn.EnableDefault();
   StartServer(args);
   PerformConnection(client_, &conn);
-}
-
-TEST_F(ConnectionTest, OpenSSLAES) {
-  static const char* const args[] = {kOpenSSLHelper, NULL};
-
-  OpenSSLContext ctx;
-  Connection conn(&ctx);
-  conn.EnableSHA(true);
-  conn.EnableAES128(true);
-  conn.EnableCBC(true);
-  conn.EnableRSA(true);
-  StartServer(args);
-  PerformConnection(client_, &conn);
-  ASSERT_STREQ(conn.cipher_suite_name(), "TLS_RSA_WITH_AES_128_CBC_SHA");
 }
 
 TEST_F(ConnectionTest, GnuTLSAES) {
-  static const char* const args[] = {kGnuTLSHelper, NULL};
+  static const char* const args[] = {GnuTLSHelper(), NULL};
 
   OpenSSLContext ctx;
   Connection conn(&ctx);
@@ -301,30 +309,8 @@ TEST_F(ConnectionTest, GnuTLSAES) {
   ASSERT_STREQ(conn.cipher_suite_name(), "TLS_RSA_WITH_AES_128_CBC_SHA");
 }
 
-TEST_F(ConnectionTest, OpenSSLSNI) {
-  static const char* const args[] = {kOpenSSLHelper, "sni", NULL};
-
-  OpenSSLContext ctx;
-  Connection conn(&ctx);
-  conn.EnableDefault();
-  conn.set_host_name("test.example.com");
-  StartServer(args);
-  PerformConnection(client_, &conn);
-}
-
-TEST_F(ConnectionTest, OpenSSLFalseStart) {
-  static const char* const args[] = {kOpenSSLHelper, NULL};
-
-  OpenSSLContext ctx;
-  Connection conn(&ctx);
-  conn.EnableDefault();
-  conn.EnableFalseStart(true);
-  StartServer(args);
-  PerformConnection(client_, &conn);
-}
-
 TEST_F(ConnectionTest, GnuTLSFalseStart) {
-  static const char* const args[] = {kGnuTLSHelper, NULL};
+  static const char* const args[] = {GnuTLSHelper(), NULL};
 
   OpenSSLContext ctx;
   Connection conn(&ctx);
@@ -335,7 +321,7 @@ TEST_F(ConnectionTest, GnuTLSFalseStart) {
 }
 
 TEST_F(ConnectionTest, GnuTLSResume) {
-  static const char* const args[] = {kGnuTLSHelper, "resume", NULL};
+  static const char* const args[] = {GnuTLSHelper(), "resume", NULL};
   Result r;
 
   OpenSSLContext ctx;
@@ -360,7 +346,7 @@ TEST_F(ConnectionTest, GnuTLSResume) {
 }
 
 TEST_F(ConnectionTest, GnuTLSResume12) {
-  static const char* const args[] = {kGnuTLSHelper, "resume", "tls1.2", NULL};
+  static const char* const args[] = {GnuTLSHelper(), "resume", "tls1.2", NULL};
   Result r;
 
   OpenSSLContext ctx;
@@ -385,7 +371,7 @@ TEST_F(ConnectionTest, GnuTLSResume12) {
 }
 
 TEST_F(ConnectionTest, GnuTLSSessionTickets) {
-  static const char* const args[] = {kGnuTLSHelper, "resume", "session-tickets", NULL};
+  static const char* const args[] = {GnuTLSHelper(), "resume", "session-tickets", NULL};
   Result r;
 
   OpenSSLContext ctx;
@@ -409,9 +395,56 @@ TEST_F(ConnectionTest, GnuTLSSessionTickets) {
   PerformConnection(client_, &conn2);
   ASSERT_TRUE(conn2.did_resume());
 }
+#endif
+
+TEST_F(ConnectionTest, OpenSSLv3) {
+  static const char* const args[] = {OpenSSLHelper(), "sslv3", NULL};
+
+  OpenSSLContext ctx;
+  Connection conn(&ctx);
+  conn.EnableDefault();
+  StartServer(args);
+  PerformConnection(client_, &conn);
+}
+
+TEST_F(ConnectionTest, OpenSSLAES) {
+  static const char* const args[] = {OpenSSLHelper(), NULL};
+
+  OpenSSLContext ctx;
+  Connection conn(&ctx);
+  conn.EnableSHA(true);
+  conn.EnableAES128(true);
+  conn.EnableCBC(true);
+  conn.EnableRSA(true);
+  StartServer(args);
+  PerformConnection(client_, &conn);
+  ASSERT_STREQ(conn.cipher_suite_name(), "TLS_RSA_WITH_AES_128_CBC_SHA");
+}
+
+TEST_F(ConnectionTest, OpenSSLSNI) {
+  static const char* const args[] = {OpenSSLHelper(), "sni", NULL};
+
+  OpenSSLContext ctx;
+  Connection conn(&ctx);
+  conn.EnableDefault();
+  conn.set_host_name("test.example.com");
+  StartServer(args);
+  PerformConnection(client_, &conn);
+}
+
+TEST_F(ConnectionTest, OpenSSLFalseStart) {
+  static const char* const args[] = {OpenSSLHelper(), NULL};
+
+  OpenSSLContext ctx;
+  Connection conn(&ctx);
+  conn.EnableDefault();
+  conn.EnableFalseStart(true);
+  StartServer(args);
+  PerformConnection(client_, &conn);
+}
 
 TEST_F(ConnectionTest, OpenSSLSessionTickets) {
-  static const char* const args[] = {kOpenSSLHelper, "session-tickets", NULL};
+  static const char* const args[] = {OpenSSLHelper(), "session-tickets", NULL};
   Result r;
 
   OpenSSLContext ctx;
@@ -437,8 +470,7 @@ TEST_F(ConnectionTest, OpenSSLSessionTickets) {
 }
 
 TEST_F(ConnectionTest, OpenSSLSnapStart) {
-  //static const char* const args[] = {"/usr/bin/gdb", "--args", kOpenSSLHelper, "snap-start", NULL};
-  static const char* const args[] = {kOpenSSLHelper, "snap-start", NULL};
+  static const char* const args[] = {OpenSSLHelper(), "snap-start", NULL};
   Result r;
 
   OpenSSLContext ctx;
@@ -470,7 +502,7 @@ TEST_F(ConnectionTest, OpenSSLSnapStart) {
 }
 
 TEST_F(ConnectionTest, OpenSSLSnapStartResume) {
-  static const char* const args[] = {kOpenSSLHelper, "snap-start", NULL};
+  static const char* const args[] = {OpenSSLHelper(), "snap-start", NULL};
   Result r;
 
   OpenSSLContext ctx;
@@ -511,7 +543,7 @@ TEST_F(ConnectionTest, OpenSSLSnapStartResume) {
 }
 
 TEST_F(ConnectionTest, OpenSSLSnapStartRecovery) {
-  static const char* const args[] = {kOpenSSLHelper, "snap-start-recovery", NULL};
+  static const char* const args[] = {OpenSSLHelper(), "snap-start-recovery", NULL};
   Result r;
 
   OpenSSLContext ctx;
@@ -543,7 +575,7 @@ TEST_F(ConnectionTest, OpenSSLSnapStartRecovery) {
 }
 
 TEST_F(ConnectionTest, OpenSSLSnapStartResumeRecovery) {
-  static const char* const args[] = {kOpenSSLHelper, "snap-start-recovery", NULL};
+  static const char* const args[] = {OpenSSLHelper(), "snap-start-recovery", NULL};
   Result r;
 
   OpenSSLContext ctx;
@@ -587,7 +619,7 @@ TEST_F(ConnectionTest, OpenSSLSnapStartResumeRecoveryMispredict) {
   // This test doesn't trigger a recovery by having the helper binary reject
   // the random, but rather by corrupting the Snap Start data so that we
   // mispredict the server's response.
-  static const char* const args[] = {kOpenSSLHelper, "snap-start", NULL};
+  static const char* const args[] = {OpenSSLHelper(), "snap-start", NULL};
   Result r;
 
   OpenSSLContext ctx;
@@ -632,7 +664,7 @@ TEST_F(ConnectionTest, OpenSSLSnapStartResumeRecoveryMispredict) {
 
 
 TEST_F(ConnectionTest, OpenSSLSnapStartResumeRecovery2) {
-  static const char* const args[] = {kOpenSSLHelper, "snap-start-recovery", NULL};
+  static const char* const args[] = {OpenSSLHelper(), "snap-start-recovery", NULL};
   Result r;
 
   OpenSSLContext ctx;

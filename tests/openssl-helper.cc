@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <string>
+
 #include <sys/types.h>
 #include <sys/socket.h>
 
@@ -18,6 +20,27 @@ static int sni_cb(SSL *s, int *ad, void *arg) {
     *reinterpret_cast<bool*>(arg) = true;
 
   return SSL_TLSEXT_ERR_OK;
+}
+
+static const char kTestSrcDirAdditional[] =
+#if defined(TEST_SRCDIR_ADDITIONAL)
+#define xstr(x) str(x)
+#define str(x) #x
+ "" xstr(TEST_SRCDIR_ADDITIONAL) "";
+#undef xstr
+#undef str
+#else
+  "";
+#endif
+
+static std::string
+TestData(const char *filename) {
+  const char* testSrcDir = getenv("TEST_SRCDIR");
+  if (testSrcDir) {
+    return std::string(testSrcDir) + "/" + kTestSrcDirAdditional + "/" + filename;
+  } else {
+    return filename;
+  }
 }
 
 int
@@ -60,8 +83,8 @@ main(int argc, char **argv) {
   }
 
   BIO* key = BIO_new(BIO_s_file());
-  if (BIO_read_filename(key, kKeyFile) <= 0) {
-    fprintf(stderr, "Failed to read %s\n", kKeyFile);
+  if (BIO_read_filename(key, TestData(kKeyFile).c_str()) <= 0) {
+    fprintf(stderr, "Failed to read %s\n", TestData(kKeyFile).c_str());
     return 1;
   }
 
@@ -74,7 +97,7 @@ main(int argc, char **argv) {
 
 
   BIO* cert = BIO_new(BIO_s_file());
-  if (BIO_read_filename(cert, kCertFile) <= 0) {
+  if (BIO_read_filename(cert, TestData(kCertFile).c_str()) <= 0) {
     fprintf(stderr, "Failed to read %s\n", kCertFile);
     return 1;
   }

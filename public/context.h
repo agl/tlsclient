@@ -31,6 +31,7 @@ class Certificate {
 // functionality that libtlsclient needs.
 class Context {
  public:
+  virtual ~Context() { }
   // RandomBytes fills a buffer with cryptographically strong random data.
   virtual bool RandomBytes(void*, size_t) = 0;
   // EpochSeconds returns the number of seconds since the UNIX epoch.

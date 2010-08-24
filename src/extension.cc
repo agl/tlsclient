@@ -30,6 +30,7 @@ namespace tlsclient {
 
 struct Extension {
  public:
+  virtual ~Extension() { }
   // Called to see if this extension should be included.
   virtual bool ShouldBeIncluded(ConnectionPrivate* priv) const = 0;
   // NeedConsistentClientHello returns true if the Sink passed to |Marshal|
